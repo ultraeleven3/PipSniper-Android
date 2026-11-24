@@ -24,10 +24,9 @@ class SettingsFragment : Fragment() {
         }
         val root = LinearLayout(requireContext()).apply { orientation = LinearLayout.VERTICAL }
 
-        // 1. Live Spot Gold Feed Info
         root.addView(sectionTitle("LIVE DATA FEED"))
         val tvFeedInfo = TextView(requireContext()).apply {
-            text = "Connected directly to live Spot Gold (XAUUSDm) pricing. No manual broker offset required."
+            text = "Connected directly to live Spot Gold (XAUUSDm) 1m klines feed. Zero manual offset required."
             setTextColor(Color.parseColor("#10B981"))
             setBackgroundColor(Color.parseColor("#141920"))
             setPadding(28, 24, 28, 24)
@@ -38,7 +37,6 @@ class SettingsFragment : Fragment() {
         }
         root.addView(tvFeedInfo)
 
-        // 2. Gemini API Key
         root.addView(sectionTitle("GEMINI AI VISION CREDENTIALS"))
         val etKey = EditText(requireContext()).apply {
             hint = "Paste Gemini API Key (AIza...)"
@@ -61,13 +59,12 @@ class SettingsFragment : Fragment() {
         val btnSaveKey = styledButton("Save Gemini API Key", "#10B981", "#0B0E11")
         root.addView(btnSaveKey)
 
-        // 3. In-App Over-the-Air Updater
         root.addView(sectionTitle("PIP SNIPER APP UPDATES"))
         val btnUpdate = styledButton("Check & Install Latest APK Update", "#1C232D", "#D4AF37")
         root.addView(btnUpdate)
 
         val tvStatus = TextView(requireContext()).apply {
-            text = "Build: v1.1.0 Institutional Terminal (Live XAUUSDm)"
+            text = "Build: v1.2.0 Institutional Terminal (Live XAUUSDm + Dynamic AI Vision)"
             setTextColor(Color.parseColor("#94A3B8"))
             setBackgroundColor(Color.parseColor("#141920"))
             setPadding(28, 24, 28, 24)

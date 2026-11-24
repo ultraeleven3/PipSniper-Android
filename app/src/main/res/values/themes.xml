@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PipSniper" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/gold_primary</item>
+        <item name="colorPrimaryVariant">@color/gold_muted</item>
+        <item name="colorOnPrimary">@color/obsidian_bg</item>
+        <item name="colorSecondary">@color/gold_bright</item>
+        <item name="android:statusBarColor">@color/obsidian_bg</item>
+        <item name="android:navigationBarColor">@color/obsidian_card</item>
+        <item name="android:windowBackground">@color/obsidian_bg</item>
+    </style>
+</resources>

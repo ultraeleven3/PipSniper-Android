@@ -11,12 +11,8 @@ class PrefsManager(context: Context) {
         set(value) = prefs.edit().putString("gemini_api_key", value.trim()).apply()
 
     var symbol: String
-        get() = prefs.getString("symbol", "GC=F") ?: "GC=F"
-        set(value) = prefs.edit().putString("symbol", value).apply()
-
-    var exnessOffset: Double
-        get() = prefs.getFloat("exness_offset", 0f).toDouble()
-        set(value) = prefs.edit().putFloat("exness_offset", value.toFloat()).apply()
+        get() = "XAUUSD=X"
+        set(_) {}
 
     var lastPrice: String
         get() = prefs.getString("last_price", "--") ?: "--"
@@ -32,7 +28,6 @@ class PrefsManager(context: Context) {
         JSONArray()
     }
 
-    // Autonomous Strategy Toggles (Ready for infinite future strategies)
     var autoHunterEnabled: Boolean
         get() = prefs.getBoolean("auto_hunter_enabled", false)
         set(value) = prefs.edit().putBoolean("auto_hunter_enabled", value).apply()

@@ -32,6 +32,7 @@ import java.util.Locale
 class ScanFragment : Fragment() {
 
     private lateinit var prefs: PrefsManager
+    private lateinit var tvRadarBanner: TextView
     private lateinit var chartView: CandlestickChartView
     private lateinit var ivPreview: ImageView
     private lateinit var rbBuy: RadioButton
@@ -68,7 +69,19 @@ class ScanFragment : Fragment() {
             orientation = LinearLayout.VERTICAL
         }
 
-        root.addView(sectionTitle("LIVE SPOT GOLD (XAUUSDm) • 1M CHART"))
+        // Dedicated Live Scanning Radar Display
+        tvRadarBanner = TextView(requireContext()).apply {
+            textSize = 13f
+            setPadding(28, 22, 28, 22)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = 18
+            }
+        }
+        root.addView(tvRadarBanner)
+        refreshRadarDisplay()
+
+        // Live Chart Section
+        root.addView(sectionTitle("LIVE XAUUSDm • 1M CANDLESTICK CHART"))
         chartView = CandlestickChartView(requireContext()).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 460).apply {
                 bottomMargin = 20
@@ -79,6 +92,7 @@ class ScanFragment : Fragment() {
         val btnRefreshChart = styledButton("Refresh Live Chart", "#1C232D", "#D4AF37")
         root.addView(btnRefreshChart)
 
+        // Mode 1: AI Chart Scanner
         root.addView(sectionTitle("MODE 1 • AI CHART SCANNER"))
         val btnPick = styledButton("1. Upload TradingView / MT5 Screenshot", "#1C232D", "#F8FAFC")
         root.addView(btnPick)
@@ -120,13 +134,13 @@ class ScanFragment : Fragment() {
         root.addView(etSl)
         root.addView(etTp)
 
-        val btnArm = styledButton("3. Arm 1m Confirmation Sniper", "#10B981", "#0B0E11")
-        val btnStop = styledButton("Disarm & Clear Active Setups", "#1C232D", "#EF4444")
+        val btnArm = styledButton("3. Start Scanning for Trade (1m Confirmation)", "#10B981", "#0B0E11")
+        val btnStop = styledButton("Stop Scanning & Clear Setups", "#1C232D", "#EF4444")
         root.addView(btnArm)
         root.addView(btnStop)
 
         tvStatus = TextView(requireContext()).apply {
-            text = "Terminal Ready. Live XAUUSDm Spot Gold active."
+            text = "Terminal Ready. Live XAUUSDm feed connected."
             setTextColor(Color.parseColor("#94A3B8"))
             setBackgroundColor(Color.parseColor("#141920"))
             setPadding(28, 24, 28, 24)
@@ -193,7 +207,8 @@ class ScanFragment : Fragment() {
             }
             prefs.setupsJson = JSONArray().apply { put(obj) }.toString()
             ContextCompat.startForegroundService(requireContext(), Intent(requireContext(), SniperWatcherService::class.java))
-            tvStatus.text = "SNIPER ARMED: $dir @ $entry | SL: $sl | TP: $tp"
+            refreshRadarDisplay()
+            tvStatus.text = "Trade scanning has begun! Watching 1m candles for $dir @ $entry..."
             loadChart(manual = false)
         }
 
@@ -202,7 +217,8 @@ class ScanFragment : Fragment() {
             if (!prefs.autoHunterEnabled) {
                 requireContext().stopService(Intent(requireContext(), SniperWatcherService::class.java))
             }
-            tvStatus.text = "Manual setups cleared."
+            refreshRadarDisplay()
+            tvStatus.text = "Trade scanning stopped and setups cleared."
             loadChart(manual = false)
         }
 
@@ -210,10 +226,53 @@ class ScanFragment : Fragment() {
         return scroll
     }
 
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (!hidden) refreshRadarDisplay()
+    }
+
+    fun refreshRadarDisplay() {
+        if (!::tvRadarBanner.isInitialized) return
+        val setups = prefs.getSetups()
+        val autoOn = prefs.autoHunterEnabled
+
+        if (setups.length() > 0) {
+            val s = setups.getJSONObject(0)
+            val dir = s.optString("direction", "BUY")
+            val entry = s.optDouble("entry", 0.0)
+            val sl = s.optDouble("sl", 0.0)
+            val tp = s.optDouble("tp", 0.0)
+            tvRadarBanner.text = "● SCANNING FOR TRADE HAS BEGUN\nActive Setup: $dir @ $entry  |  SL: $sl  |  TP: $tp\nMonitoring live 1m candles in background..."
+            tvRadarBanner.setTextColor(Color.parseColor("#10B981"))
+            tvRadarBanner.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#0D261E"))
+                cornerRadius = 20f
+                setStroke(3, Color.parseColor("#10B981"))
+            }
+        } else if (autoOn) {
+            tvRadarBanner.text = "● AUTONOMOUS TRADE SCANNING ACTIVE\n24/7 Strategy Hunter is scanning live XAUUSDm candles..."
+            tvRadarBanner.setTextColor(Color.parseColor("#D4AF37"))
+            tvRadarBanner.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#241F10"))
+                cornerRadius = 20f
+                setStroke(3, Color.parseColor("#D4AF37"))
+            }
+        } else {
+            tvRadarBanner.text = "○ RADAR STANDBY — Not Scanning\nUpload a chart or enter levels below and tap 'Start Scanning for Trade'."
+            tvRadarBanner.setTextColor(Color.parseColor("#94A3B8"))
+            tvRadarBanner.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#141920"))
+                cornerRadius = 20f
+                setStroke(2, Color.parseColor("#283240"))
+            }
+        }
+    }
+
     private fun startLiveChartLoop() {
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
             while (isActive) {
                 loadChartSuspend(manual = false)
+                withContext(Dispatchers.Main) { refreshRadarDisplay() }
                 delay(15_000)
             }
         }
@@ -247,7 +306,7 @@ class ScanFragment : Fragment() {
                         tvStatus.text = "Live chart updated • XAUUSDm: ${String.format(Locale.US, "%.2f", lastClose)}"
                     }
                 } else if (manual) {
-                    tvStatus.text = "Market feed temporarily unreachable. Check internet connection."
+                    tvStatus.text = "Could not fetch candles. Check internet connection."
                 }
             }
         } catch (e: Exception) {

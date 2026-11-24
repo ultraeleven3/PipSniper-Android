@@ -26,6 +26,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: PrefsManager
     private lateinit var tvLiveTicker: TextView
 
+    private val scanFragment = ScanFragment()
+    private val hunterFragment = AutoHunterFragment()
+    private val toolsFragment = ToolsFragment()
+    private val settingsFragment = SettingsFragment()
+    private var activeFragment: Fragment = scanFragment
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -37,26 +43,33 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermission()
 
         if (savedInstanceState == null) {
-            switchFragment(ScanFragment())
+            supportFragmentManager.beginTransaction()
+                .add(R.id.fragmentContainer, settingsFragment, "4").hide(settingsFragment)
+                .add(R.id.fragmentContainer, toolsFragment, "3").hide(toolsFragment)
+                .add(R.id.fragmentContainer, hunterFragment, "2").hide(hunterFragment)
+                .add(R.id.fragmentContainer, scanFragment, "1")
+                .commit()
         }
 
         bottomNav.setOnItemSelectedListener { item ->
-            when (item.itemId) {
-                R.id.nav_scan -> switchFragment(ScanFragment())
-                R.id.nav_hunter -> switchFragment(AutoHunterFragment())
-                R.id.nav_tools -> switchFragment(ToolsFragment())
-                R.id.nav_settings -> switchFragment(SettingsFragment())
+            val target = when (item.itemId) {
+                R.id.nav_scan -> scanFragment
+                R.id.nav_hunter -> hunterFragment
+                R.id.nav_tools -> toolsFragment
+                R.id.nav_settings -> settingsFragment
+                else -> scanFragment
+            }
+            if (target != activeFragment) {
+                supportFragmentManager.beginTransaction()
+                    .hide(activeFragment)
+                    .show(target)
+                    .commit()
+                activeFragment = target
             }
             true
         }
 
         startHeaderTickerLoop()
-    }
-
-    private fun switchFragment(fragment: Fragment) {
-        supportFragmentManager.beginTransaction()
-            .replace(R.id.fragmentContainer, fragment)
-            .commit()
     }
 
     private fun startHeaderTickerLoop() {
@@ -67,12 +80,11 @@ class MainActivity : AppCompatActivity() {
                         symbol = prefs.symbol,
                         interval = "1m",
                         range = "1d",
-                        exnessOffset = prefs.exnessOffset,
                         limit = 5
                     )
                     if (candles.isNotEmpty()) {
                         val price = candles.last().close
-                        val formatted = String.format(Locale.US, "XAUUSD %.2f", price)
+                        val formatted = String.format(Locale.US, "XAUUSDm %.2f", price)
                         prefs.lastPrice = String.format(Locale.US, "%.2f", price)
                         withContext(Dispatchers.Main) {
                             tvLiveTicker.text = formatted

@@ -59,7 +59,6 @@ class SniperWatcherService : Service() {
                         symbol = prefs.symbol,
                         interval = "1m",
                         range = "1d",
-                        exnessOffset = prefs.exnessOffset,
                         limit = 40
                     )
 
@@ -69,7 +68,6 @@ class SniperWatcherService : Service() {
                         val currentPrice = liveCandle.close
                         val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
 
-                        // 1. Evaluate Mode 1 Manual / AI Setups
                         val freshSetups = prefs.getSetups()
                         val updated = JSONArray()
                         var nearestDist = Double.MAX_VALUE
@@ -117,7 +115,7 @@ class SniperWatcherService : Service() {
                                 if (StrategyEngine.check1mZoneConfirmation(candles, dir)) {
                                     sendAlert(
                                         "$dir CONFIRMED!",
-                                        "Exness XAUUSD: ${String.format(Locale.US, "%.2f", currentPrice)} | Entry: $entry | SL: $sl | TP: $tp",
+                                        "XAUUSDm: ${String.format(Locale.US, "%.2f", currentPrice)} | Entry: $entry | SL: $sl | TP: $tp",
                                         urgent = true
                                     )
                                     continue
@@ -129,7 +127,6 @@ class SniperWatcherService : Service() {
                         prefs.setupsJson = updated.toString()
                         prefs.lastPrice = String.format(Locale.US, "%.2f", currentPrice)
 
-                        // 2. Evaluate Mode 2 Autonomous Strategy Hunter
                         if (autoEnabled) {
                             val signal = StrategyEngine.scanAutonomousStrategies(candles, prefs)
                             if (signal != null && signal.candleTimestamp > lastAutoCandleTs) {
@@ -144,7 +141,7 @@ class SniperWatcherService : Service() {
 
                         val distLabel = if (nearestDist < Double.MAX_VALUE) String.format(Locale.US, "%.2f", nearestDist) else "Auto"
                         updateForegroundNotification(
-                            "XAUUSD: ${String.format(Locale.US, "%.2f", currentPrice)} | Target: $distLabel | $timeStr"
+                            "XAUUSDm: ${String.format(Locale.US, "%.2f", currentPrice)} | Target: $distLabel | $timeStr"
                         )
                     } else {
                         updateForegroundNotification("Feed stalled — retrying...")

@@ -21,6 +21,8 @@ import com.apexquant.pipsniper.core.MarketDataEngine
 import com.apexquant.pipsniper.core.PrefsManager
 import com.apexquant.pipsniper.service.SniperWatcherService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -42,11 +44,15 @@ class ScanFragment : Fragment() {
 
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
-            requireContext().contentResolver.openInputStream(it)?.use { stream ->
-                selectedBitmap = BitmapFactory.decodeStream(stream)
-                ivPreview.setImageBitmap(selectedBitmap)
-                ivPreview.visibility = View.VISIBLE
-                tvStatus.text = "Chart screenshot loaded. Tap 'Scan Chart with AI'."
+            try {
+                requireContext().contentResolver.openInputStream(it)?.use { stream ->
+                    selectedBitmap = BitmapFactory.decodeStream(stream)
+                    ivPreview.setImageBitmap(selectedBitmap)
+                    ivPreview.visibility = View.VISIBLE
+                    tvStatus.text = "Chart screenshot loaded. Tap '2. Scan Chart with Gemini AI'."
+                }
+            } catch (e: Exception) {
+                tvStatus.text = "Could not open image: ${e.message}"
             }
         }
     }
@@ -62,8 +68,7 @@ class ScanFragment : Fragment() {
             orientation = LinearLayout.VERTICAL
         }
 
-        // Live Chart Card
-        root.addView(sectionTitle("LIVE EXNESS XAUUSD • 1M CHART"))
+        root.addView(sectionTitle("LIVE SPOT GOLD (XAUUSDm) • 1M CHART"))
         chartView = CandlestickChartView(requireContext()).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 460).apply {
                 bottomMargin = 20
@@ -74,7 +79,6 @@ class ScanFragment : Fragment() {
         val btnRefreshChart = styledButton("Refresh Live Chart", "#1C232D", "#D4AF37")
         root.addView(btnRefreshChart)
 
-        // Mode 1: AI Chart Scanner
         root.addView(sectionTitle("MODE 1 • AI CHART SCANNER"))
         val btnPick = styledButton("1. Upload TradingView / MT5 Screenshot", "#1C232D", "#F8FAFC")
         root.addView(btnPick)
@@ -91,7 +95,6 @@ class ScanFragment : Fragment() {
         val btnScan = styledButton("2. Scan Chart with Gemini AI", "#D4AF37", "#0B0E11")
         root.addView(btnScan)
 
-        // Direction & Trade Levels
         val rg = RadioGroup(requireContext()).apply {
             orientation = RadioGroup.HORIZONTAL
             setPadding(0, 8, 0, 16)
@@ -110,7 +113,7 @@ class ScanFragment : Fragment() {
         rg.addView(rbSell)
         root.addView(rg)
 
-        etEntry = styledInput("Entry Price (Exness XAUUSD)")
+        etEntry = styledInput("Entry Price (XAUUSDm)")
         etSl = styledInput("Stop Loss (SL)")
         etTp = styledInput("Take Profit (TP)")
         root.addView(etEntry)
@@ -123,7 +126,7 @@ class ScanFragment : Fragment() {
         root.addView(btnStop)
 
         tvStatus = TextView(requireContext()).apply {
-            text = "Terminal Ready. Sync Exness offset in Terminal tab if needed."
+            text = "Terminal Ready. Live XAUUSDm Spot Gold active."
             setTextColor(Color.parseColor("#94A3B8"))
             setBackgroundColor(Color.parseColor("#141920"))
             setPadding(28, 24, 28, 24)
@@ -133,7 +136,10 @@ class ScanFragment : Fragment() {
 
         scroll.addView(root)
 
-        btnRefreshChart.setOnClickListener { loadChart() }
+        btnRefreshChart.setOnClickListener {
+            tvStatus.text = "Refreshing live XAUUSDm candles..."
+            loadChart(manual = true)
+        }
         btnPick.setOnClickListener { pickImage.launch("image/*") }
 
         btnScan.setOnClickListener {
@@ -160,7 +166,7 @@ class ScanFragment : Fragment() {
                         if (res.sl > 0) etSl.setText(res.sl.toString())
                         if (res.tp > 0) etTp.setText(res.tp.toString())
                         tvStatus.text = "AI Extracted: ${res.direction} | Entry: ${res.entry} | SL: ${res.sl} | TP: ${res.tp}"
-                        loadChart()
+                        loadChart(manual = false)
                     } else {
                         tvStatus.text = "Scan Failed: ${res.errorMessage}"
                     }
@@ -188,7 +194,7 @@ class ScanFragment : Fragment() {
             prefs.setupsJson = JSONArray().apply { put(obj) }.toString()
             ContextCompat.startForegroundService(requireContext(), Intent(requireContext(), SniperWatcherService::class.java))
             tvStatus.text = "SNIPER ARMED: $dir @ $entry | SL: $sl | TP: $tp"
-            loadChart()
+            loadChart(manual = false)
         }
 
         btnStop.setOnClickListener {
@@ -197,35 +203,59 @@ class ScanFragment : Fragment() {
                 requireContext().stopService(Intent(requireContext(), SniperWatcherService::class.java))
             }
             tvStatus.text = "Manual setups cleared."
-            loadChart()
+            loadChart(manual = false)
         }
 
-        loadChart()
+        startLiveChartLoop()
         return scroll
     }
 
-    private fun loadChart() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val candles = MarketDataEngine.fetchCandles(
-                    symbol = prefs.symbol,
-                    interval = "1m",
-                    range = "1d",
-                    exnessOffset = prefs.exnessOffset,
-                    limit = 35
-                )
-                withContext(Dispatchers.Main) {
-                    if (candles.isNotEmpty()) {
-                        prefs.lastPrice = String.format(Locale.US, "%.2f", candles.last().close)
-                        chartView.updateData(
-                            candles,
-                            etEntry.text.toString().toDoubleOrNull(),
-                            etSl.text.toString().toDoubleOrNull(),
-                            etTp.text.toString().toDoubleOrNull()
-                        )
+    private fun startLiveChartLoop() {
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                loadChartSuspend(manual = false)
+                delay(15_000)
+            }
+        }
+    }
+
+    private fun loadChart(manual: Boolean) {
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            loadChartSuspend(manual)
+        }
+    }
+
+    private suspend fun loadChartSuspend(manual: Boolean) {
+        try {
+            val candles = MarketDataEngine.fetchCandles(
+                symbol = prefs.symbol,
+                interval = "1m",
+                range = "1d",
+                limit = 35
+            )
+            withContext(Dispatchers.Main) {
+                if (candles.isNotEmpty()) {
+                    val lastClose = candles.last().close
+                    prefs.lastPrice = String.format(Locale.US, "%.2f", lastClose)
+                    chartView.updateData(
+                        candles,
+                        etEntry.text.toString().toDoubleOrNull(),
+                        etSl.text.toString().toDoubleOrNull(),
+                        etTp.text.toString().toDoubleOrNull()
+                    )
+                    if (manual) {
+                        tvStatus.text = "Live chart updated • XAUUSDm: ${String.format(Locale.US, "%.2f", lastClose)}"
                     }
+                } else if (manual) {
+                    tvStatus.text = "Market feed temporarily unreachable. Check internet connection."
                 }
-            } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            if (manual) {
+                withContext(Dispatchers.Main) {
+                    tvStatus.text = "Feed error: ${e.message}"
+                }
+            }
         }
     }
 

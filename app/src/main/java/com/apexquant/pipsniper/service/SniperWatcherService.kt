@@ -6,7 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.apexquant.pipsniper.ui.MainActivity
+import com.apexquant.pipsniper.MainActivity
 import com.apexquant.pipsniper.core.*
 import kotlinx.coroutines.*
 import org.json.JSONArray

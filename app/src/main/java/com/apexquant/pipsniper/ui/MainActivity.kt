@@ -2,6 +2,7 @@ package com.apexquant.pipsniper
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
@@ -20,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import com.apexquant.pipsniper.core.PrefsManager
 import com.apexquant.pipsniper.ui.*
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.navigation.NavigationBarView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -100,15 +102,16 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(fragmentContainer)
 
-        // Bottom Navigation (5 Tabs including History)
+        // Crash-proof 5-Tab Bottom Navigation
         val bottomNav = BottomNavigationView(this).apply {
             setBackgroundColor(Color.parseColor("#11161D"))
-            itemIconTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#D4AF37"))
-            itemTextColor = android.content.res.ColorStateList.valueOf(Color.parseColor("#F8FAFC"))
-            menu.add(0, 1, 0, "Sniper Scan").setIcon(android.R.drawable.ic_menu_compass)
-            menu.add(0, 2, 1, "Auto Hunter").setIcon(android.R.drawable.ic_menu_manage)
-            menu.add(0, 3, 2, "History").setIcon(android.R.drawable.ic_menu_recent_history)
-            menu.add(0, 4, 3, "Pro Tools").setIcon(android.R.drawable.ic_menu_agenda)
+            labelVisibilityMode = NavigationBarView.LABEL_VISIBILITY_LABELED
+            itemIconTintList = ColorStateList.valueOf(Color.parseColor("#D4AF37"))
+            itemTextColor = ColorStateList.valueOf(Color.parseColor("#F8FAFC"))
+            menu.add(0, 1, 0, "Scan").setIcon(android.R.drawable.ic_menu_compass)
+            menu.add(0, 2, 1, "Hunter").setIcon(android.R.drawable.ic_menu_manage)
+            menu.add(0, 3, 2, "History").setIcon(android.R.drawable.ic_menu_today)
+            menu.add(0, 4, 3, "Tools").setIcon(android.R.drawable.ic_menu_agenda)
             menu.add(0, 5, 4, "Terminal").setIcon(android.R.drawable.ic_menu_preferences)
         }
         root.addView(bottomNav)
@@ -121,7 +124,7 @@ class MainActivity : AppCompatActivity() {
                 .add(containerId, historyFragment, "3").hide(historyFragment)
                 .add(containerId, autoHunterFragment, "2").hide(autoHunterFragment)
                 .add(containerId, scanFragment, "1")
-                .commit()
+                .commitNow()
         }
 
         bottomNav.setOnItemSelectedListener { item ->
@@ -137,7 +140,7 @@ class MainActivity : AppCompatActivity() {
                 supportFragmentManager.beginTransaction()
                     .hide(activeFragment)
                     .show(target)
-                    .commit()
+                    .commitAllowingStateLoss()
                 activeFragment = target
             }
             true

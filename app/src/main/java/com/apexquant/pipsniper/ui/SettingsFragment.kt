@@ -64,7 +64,7 @@ class SettingsFragment : Fragment() {
         root.addView(btnUpdate)
 
         val tvStatus = TextView(requireContext()).apply {
-            text = "Build: v1.2.0 Institutional Terminal (Live XAUUSDm + Dynamic AI Vision)"
+            text = "Build: v1.3.0 Institutional Terminal (Unlimited Trade History & Analytics)"
             setTextColor(Color.parseColor("#94A3B8"))
             setBackgroundColor(Color.parseColor("#141920"))
             setPadding(28, 24, 28, 24)

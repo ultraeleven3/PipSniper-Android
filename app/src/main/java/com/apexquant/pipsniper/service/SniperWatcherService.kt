@@ -6,10 +6,11 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.apexquant.pipsniper.MainActivity
+import com.apexquant.pipsniper.ui.MainActivity
 import com.apexquant.pipsniper.core.*
 import kotlinx.coroutines.*
 import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Locale
 
 class SniperWatcherService : Service() {
@@ -75,7 +76,6 @@ class SniperWatcherService : Service() {
             val createdTs = s.optLong("created_ts", nowSec)
 
             if (!triggered) {
-                // Check if SL was invalidated BEFORE confirmation ever occurred
                 val invalidatedBySl = if (dir == "BUY") latest.low <= sl else latest.high >= sl
                 val expiredWithoutConf = (nowSec - createdTs) > (4 * 3600)
 
@@ -98,7 +98,6 @@ class SniperWatcherService : Service() {
                     continue
                 }
 
-                // Check Entry Zone Tap
                 if (!tapped) {
                     val isTap = if (dir == "BUY") {
                         latest.low <= entry + 1.0 && latest.close >= sl
@@ -119,9 +118,8 @@ class SniperWatcherService : Service() {
                     }
                 }
 
-                // Check 1m Confirmation
                 if (tapped && closed.timestamp >= tapTs - 60) {
-                    val pattern = StrategyEngine.detectConfirmation(dir, prev, closed)
+                    val pattern = detect1mConfirmation(dir, prev, closed)
                     if (pattern != null) {
                         triggered = true
                         s.put("triggered", true)
@@ -139,7 +137,6 @@ class SniperWatcherService : Service() {
                 }
                 remaining.put(s)
             } else {
-                // Trade is LIVE/TRIGGERED — check if TP or SL is reached
                 val hitTp = if (dir == "BUY") latest.high >= tp else latest.low <= tp
                 val hitSl = if (dir == "BUY") latest.low <= sl else latest.high >= sl
 
@@ -174,12 +171,7 @@ class SniperWatcherService : Service() {
 
         // 2. Evaluate Autonomous Strategy Hunter (Mode 2) & Log to History
         if (prefs.autoHunterEnabled) {
-            val enabledStrategies = mutableSetOf<String>()
-            if (prefs.stratSmc) enabledStrategies.add("SMC")
-            if (prefs.stratFvg) enabledStrategies.add("FVG")
-            if (prefs.stratBreakout) enabledStrategies.add("BREAKOUT")
-
-            val signal = StrategyEngine.scanAutonomousStrategies(candles, enabledStrategies)
+            val signal = StrategyEngine.scanAutonomousStrategies(candles, prefs)
             if (signal != null && (closed.timestamp - lastAutoSignalTs) >= 300) {
                 lastAutoSignalTs = closed.timestamp
                 val autoId = TradeHistoryManager.recordNewTrade(
@@ -192,9 +184,8 @@ class SniperWatcherService : Service() {
                     initialStatus = "TRIGGERED",
                     initialReason = signal.reason
                 )
-                // Also watch this autonomous signal for TP/SL resolution
                 val updated = prefs.getSetups()
-                updated.put(org.json.JSONObject().apply {
+                updated.put(JSONObject().apply {
                     put("history_id", autoId)
                     put("direction", signal.direction)
                     put("entry", signal.entry)
@@ -211,6 +202,29 @@ class SniperWatcherService : Service() {
                     "AUTO HUNTER ${signal.direction} • ${signal.strategyName}",
                     "${signal.reason} | Entry: ${signal.entry} | SL: ${signal.sl} | TP: ${signal.tp}"
                 )
+            }
+        }
+    }
+
+    private fun detect1mConfirmation(direction: String, prev: Candle, closed: Candle): String? {
+        val body = kotlin.math.abs(closed.close - closed.open)
+        val upperWick = closed.high - maxOf(closed.open, closed.close)
+        val lowerWick = minOf(closed.open, closed.close) - closed.low
+        val prevBody = kotlin.math.abs(prev.close - prev.open)
+
+        return if (direction == "BUY") {
+            when {
+                closed.close > prev.high -> "1m Bullish CHoCH"
+                closed.close > closed.open && lowerWick > (body * 1.8) -> "1m Bullish Rejection Pinbar"
+                closed.close > closed.open && prev.close < prev.open && body > prevBody -> "1m Bullish Engulfing"
+                else -> null
+            }
+        } else {
+            when {
+                closed.close < prev.low -> "1m Bearish CHoCH"
+                closed.close < closed.open && upperWick > (body * 1.8) -> "1m Bearish Rejection Pinbar"
+                closed.close < closed.open && prev.close > prev.open && body > prevBody -> "1m Bearish Engulfing"
+                else -> null
             }
         }
     }

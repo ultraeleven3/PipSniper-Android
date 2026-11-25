@@ -3,232 +3,260 @@ package com.apexquant.pipsniper.service
 import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import com.apexquant.pipsniper.core.MarketDataEngine
-import com.apexquant.pipsniper.core.PrefsManager
-import com.apexquant.pipsniper.core.StrategyEngine
-import com.apexquant.pipsniper.ui.MainActivity
+import com.apexquant.pipsniper.MainActivity
+import com.apexquant.pipsniper.core.*
 import kotlinx.coroutines.*
 import org.json.JSONArray
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
 
 class SniperWatcherService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val FG_CHANNEL = "pipsniper_terminal_fg"
-    private val ALERT_CHANNEL = "pipsniper_terminal_alerts"
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var lastAutoCandleTs = 0L
+    private lateinit var prefs: PrefsManager
+    private var lastAutoSignalTs = 0L
+
+    companion object {
+        const val CHANNEL_ID = "pip_sniper_alerts"
+        const val FOREGROUND_ID = 1001
+    }
 
     override fun onCreate() {
         super.onCreate()
-        createChannels()
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PipSniper::TerminalLock")
-        startForeground(101, buildForegroundNotification("Pip Sniper Terminal initializing..."))
-        startLoop()
+        prefs = PrefsManager(this)
+        createNotificationChannel()
     }
 
-    private fun startLoop() {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(FOREGROUND_ID, buildNotification("Pip Sniper Active", "Scanning live ${prefs.symbol} 1m candles..."))
+
         scope.launch {
             while (isActive) {
                 try {
-                    val prefs = PrefsManager(this@SniperWatcherService)
-                    val initialSetups = prefs.getSetups()
-                    val autoEnabled = prefs.autoHunterEnabled
-
-                    if (initialSetups.length() == 0 && !autoEnabled) {
-                        releaseWakeLock()
-                        updateForegroundNotification("Standby | No active setups or Auto-Hunter")
-                        delay(15_000)
-                        continue
-                    }
-
-                    acquireWakeLock()
-                    val candles = MarketDataEngine.fetchCandles(
-                        symbol = prefs.symbol,
-                        interval = "1m",
-                        range = "1d",
-                        limit = 40
-                    )
-
-                    if (candles.size >= 10) {
-                        val liveCandle = candles.last()
-                        val closedCandle = candles[candles.size - 2]
-                        val currentPrice = liveCandle.close
-                        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-
-                        val freshSetups = prefs.getSetups()
-                        val updated = JSONArray()
-                        var nearestDist = Double.MAX_VALUE
-
-                        for (i in 0 until freshSetups.length()) {
-                            val s = freshSetups.getJSONObject(i)
-                            val dir = s.getString("direction").uppercase(Locale.US)
-                            val entry = s.getDouble("entry")
-                            val sl = s.getDouble("sl")
-                            val tp = s.getDouble("tp")
-                            var tapped = s.optBoolean("tapped", false)
-                            var tapTimestamp = s.optLong("tap_ts", 0L)
-
-                            nearestDist = min(nearestDist, abs(currentPrice - entry))
-
-                            if ((dir == "BUY" && currentPrice <= sl) || (dir == "SELL" && currentPrice >= sl)) {
-                                sendAlert("Setup Invalidated ($dir)", "$dir @ $entry hit SL $sl before 1m confirmation.", urgent = false)
-                                continue
-                            }
-
-                            val recentLow = min(liveCandle.low, closedCandle.low)
-                            val recentHigh = max(liveCandle.high, closedCandle.high)
-
-                            if (!tapped) {
-                                val hitZone = if (dir == "BUY") {
-                                    recentLow <= entry + 0.80 && currentPrice > sl
-                                } else {
-                                    recentHigh >= entry - 0.80 && currentPrice < sl
-                                }
-
-                                if (hitZone) {
-                                    tapped = true
-                                    tapTimestamp = if (
-                                        (dir == "BUY" && closedCandle.low <= entry + 0.80) ||
-                                        (dir == "SELL" && closedCandle.high >= entry - 0.80)
-                                    ) closedCandle.timestamp else liveCandle.timestamp
-
-                                    s.put("tapped", true)
-                                    s.put("tap_ts", tapTimestamp)
-                                    sendAlert("Zone Tapped! ($dir)", "Price tapped $entry. Waiting for 1m closed confirmation...", urgent = false)
-                                }
-                            }
-
-                            if (tapped && closedCandle.timestamp >= tapTimestamp) {
-                                if (StrategyEngine.check1mZoneConfirmation(candles, dir)) {
-                                    sendAlert(
-                                        "$dir CONFIRMED!",
-                                        "XAUUSDm: ${String.format(Locale.US, "%.2f", currentPrice)} | Entry: $entry | SL: $sl | TP: $tp",
-                                        urgent = true
-                                    )
-                                    continue
-                                }
-                            }
-                            updated.put(s)
-                        }
-
-                        prefs.setupsJson = updated.toString()
-                        prefs.lastPrice = String.format(Locale.US, "%.2f", currentPrice)
-
-                        if (autoEnabled) {
-                            val signal = StrategyEngine.scanAutonomousStrategies(candles, prefs)
-                            if (signal != null && signal.candleTimestamp > lastAutoCandleTs) {
-                                lastAutoCandleTs = signal.candleTimestamp
-                                sendAlert(
-                                    "AUTO SIGNAL: ${signal.direction} (${signal.strategyName})",
-                                    "Entry: ${String.format(Locale.US, "%.2f", signal.entry)} | SL: ${String.format(Locale.US, "%.2f", signal.sl)} | TP: ${String.format(Locale.US, "%.2f", signal.tp)}\n${signal.reason}",
-                                    urgent = true
-                                )
-                            }
-                        }
-
-                        val distLabel = if (nearestDist < Double.MAX_VALUE) String.format(Locale.US, "%.2f", nearestDist) else "Auto"
-                        updateForegroundNotification(
-                            "XAUUSDm: ${String.format(Locale.US, "%.2f", currentPrice)} | Target: $distLabel | $timeStr"
-                        )
-                    } else {
-                        updateForegroundNotification("Feed stalled — retrying...")
-                    }
+                    runTick()
                 } catch (_: Exception) {
-                    updateForegroundNotification("Reconnecting live feed...")
                 }
                 delay(15_000)
             }
         }
+        return START_STICKY
     }
 
-    private fun buildForegroundNotification(statusText: String): Notification {
-        val intent = Intent(this, MainActivity::class.java)
-        val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this, FG_CHANNEL)
-            .setContentTitle("Pip Sniper Terminal")
-            .setContentText(statusText)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentIntent(pi)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .build()
-    }
-
-    private fun updateForegroundNotification(statusText: String) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(101, buildForegroundNotification(statusText))
-    }
-
-    private fun sendAlert(title: String, msg: String, urgent: Boolean) {
-        val alarmSound = RingtoneManager.getDefaultUri(
-            if (urgent) RingtoneManager.TYPE_ALARM else RingtoneManager.TYPE_NOTIFICATION
+    private fun runTick() {
+        val candles = MarketDataEngine.fetchCandles(
+            symbol = prefs.symbol,
+            interval = "1m",
+            range = "1d",
+            limit = 45
         )
-        val intent = Intent(this, MainActivity::class.java)
-        val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+        if (candles.size < 5) return
 
-        val notif = NotificationCompat.Builder(this, ALERT_CHANNEL)
-            .setContentTitle(title)
-            .setContentText(msg)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(msg))
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setSound(alarmSound)
-            .setVibrate(longArrayOf(0, 500, 250, 500, 250, 800))
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .build()
+        val latest = candles.last()
+        val closed = candles[candles.size - 2]
+        val prev = candles[candles.size - 3]
+        prefs.lastPrice = String.format(Locale.US, "%.2f", latest.close)
+        val nowSec = System.currentTimeMillis() / 1000L
 
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(System.currentTimeMillis().toInt(), notif)
-    }
+        // 1. Evaluate Armed Setups + Lifecycle Tracking for History
+        val setups = prefs.getSetups()
+        val remaining = JSONArray()
+        for (i in 0 until setups.length()) {
+            val s = setups.getJSONObject(i)
+            val dir = s.getString("direction")
+            val entry = s.getDouble("entry")
+            val sl = s.getDouble("sl")
+            val tp = s.getDouble("tp")
+            val historyId = s.optString("history_id", "")
+            var tapped = s.optBoolean("tapped", false)
+            var tapTs = s.optLong("tap_ts", 0L)
+            var triggered = s.optBoolean("triggered", false)
+            val createdTs = s.optLong("created_ts", nowSec)
 
-    private fun createChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(
-                NotificationChannel(FG_CHANNEL, "Pip Sniper Terminal", NotificationManager.IMPORTANCE_LOW)
-            )
-            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            val audioAttrs = AudioAttributes.Builder()
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .build()
-            val alertCh = NotificationChannel(ALERT_CHANNEL, "Pip Sniper Trade Signals", NotificationManager.IMPORTANCE_HIGH).apply {
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 250, 500, 250, 800)
-                setSound(alarmUri, audioAttrs)
+            if (!triggered) {
+                // Check if SL was invalidated BEFORE confirmation ever occurred
+                val invalidatedBySl = if (dir == "BUY") latest.low <= sl else latest.high >= sl
+                val expiredWithoutConf = (nowSec - createdTs) > (4 * 3600)
+
+                if (invalidatedBySl) {
+                    TradeHistoryManager.updateTradeStatus(
+                        this,
+                        historyId,
+                        "INVALID",
+                        "Price hit SL ($sl) before 1m confirmation formed"
+                    )
+                    continue
+                }
+                if (expiredWithoutConf) {
+                    TradeHistoryManager.updateTradeStatus(
+                        this,
+                        historyId,
+                        "INVALID",
+                        "Expired after 4h with no 1m confirmation"
+                    )
+                    continue
+                }
+
+                // Check Entry Zone Tap
+                if (!tapped) {
+                    val isTap = if (dir == "BUY") {
+                        latest.low <= entry + 1.0 && latest.close >= sl
+                    } else {
+                        latest.high >= entry - 1.0 && latest.close <= sl
+                    }
+                    if (isTap) {
+                        tapped = true
+                        tapTs = nowSec
+                        s.put("tapped", true)
+                        s.put("tap_ts", tapTs)
+                        TradeHistoryManager.updateTradeStatus(
+                            this,
+                            historyId,
+                            "SCANNING",
+                            "Entry zone tapped — awaiting 1m confirmation candle"
+                        )
+                    }
+                }
+
+                // Check 1m Confirmation
+                if (tapped && closed.timestamp >= tapTs - 60) {
+                    val pattern = StrategyEngine.detectConfirmation(dir, prev, closed)
+                    if (pattern != null) {
+                        triggered = true
+                        s.put("triggered", true)
+                        TradeHistoryManager.updateTradeStatus(
+                            this,
+                            historyId,
+                            "TRIGGERED",
+                            "Confirmed via $pattern • Now tracking TP ($tp) / SL ($sl)"
+                        )
+                        fireHighPriorityAlert(
+                            "SNIPER $dir CONFIRMED • ${prefs.symbol}",
+                            "$pattern @ ${closed.close} | Entry: $entry | SL: $sl | TP: $tp"
+                        )
+                    }
+                }
+                remaining.put(s)
+            } else {
+                // Trade is LIVE/TRIGGERED — check if TP or SL is reached
+                val hitTp = if (dir == "BUY") latest.high >= tp else latest.low <= tp
+                val hitSl = if (dir == "BUY") latest.low <= sl else latest.high >= sl
+
+                if (hitTp) {
+                    TradeHistoryManager.updateTradeStatus(
+                        this,
+                        historyId,
+                        "TP_HIT",
+                        "Target reached at $tp (${prefs.symbol})"
+                    )
+                    fireHighPriorityAlert(
+                        "TP HIT ✅ • $dir ${prefs.symbol}",
+                        "Take Profit $tp reached! Logged in Trade History."
+                    )
+                } else if (hitSl) {
+                    TradeHistoryManager.updateTradeStatus(
+                        this,
+                        historyId,
+                        "SL_HIT",
+                        "Stop Loss hit at $sl (${prefs.symbol})"
+                    )
+                    fireHighPriorityAlert(
+                        "SL HIT ❌ • $dir ${prefs.symbol}",
+                        "Stop Loss $sl hit. Logged in Trade History."
+                    )
+                } else {
+                    remaining.put(s)
+                }
             }
-            nm.createNotificationChannel(alertCh)
+        }
+        prefs.setupsJson = remaining.toString()
+
+        // 2. Evaluate Autonomous Strategy Hunter (Mode 2) & Log to History
+        if (prefs.autoHunterEnabled) {
+            val enabledStrategies = mutableSetOf<String>()
+            if (prefs.stratSmc) enabledStrategies.add("SMC")
+            if (prefs.stratFvg) enabledStrategies.add("FVG")
+            if (prefs.stratBreakout) enabledStrategies.add("BREAKOUT")
+
+            val signal = StrategyEngine.scanAutonomousStrategies(candles, enabledStrategies)
+            if (signal != null && (closed.timestamp - lastAutoSignalTs) >= 300) {
+                lastAutoSignalTs = closed.timestamp
+                val autoId = TradeHistoryManager.recordNewTrade(
+                    context = this,
+                    source = "Auto Hunter (${signal.strategyName})",
+                    direction = signal.direction,
+                    entry = signal.entry,
+                    sl = signal.sl,
+                    tp = signal.tp,
+                    initialStatus = "TRIGGERED",
+                    initialReason = signal.reason
+                )
+                // Also watch this autonomous signal for TP/SL resolution
+                val updated = prefs.getSetups()
+                updated.put(org.json.JSONObject().apply {
+                    put("history_id", autoId)
+                    put("direction", signal.direction)
+                    put("entry", signal.entry)
+                    put("sl", signal.sl)
+                    put("tp", signal.tp)
+                    put("tapped", true)
+                    put("triggered", true)
+                    put("created_ts", nowSec)
+                    put("tap_ts", nowSec)
+                })
+                prefs.setupsJson = updated.toString()
+
+                fireHighPriorityAlert(
+                    "AUTO HUNTER ${signal.direction} • ${signal.strategyName}",
+                    "${signal.reason} | Entry: ${signal.entry} | SL: ${signal.sl} | TP: ${signal.tp}"
+                )
+            }
         }
     }
 
-    private fun acquireWakeLock() {
-        if (wakeLock?.isHeld == false) wakeLock?.acquire(60 * 60 * 1000L)
+    private fun fireHighPriorityAlert(title: String, body: String) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val intent = Intent(this, MainActivity::class.java)
+        val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+
+        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+
+        nm.notify((System.currentTimeMillis() % 100000).toInt(), notif)
     }
 
-    private fun releaseWakeLock() {
-        if (wakeLock?.isHeld == true) wakeLock?.release()
+    private fun buildNotification(title: String, content: String): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setOngoing(true)
+            .setContentIntent(pi)
+            .build()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(CHANNEL_ID, "Pip Sniper Trade Alerts", NotificationManager.IMPORTANCE_HIGH)
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(channel)
+        }
+    }
 
     override fun onDestroy() {
-        releaseWakeLock()
         scope.cancel()
         super.onDestroy()
     }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }

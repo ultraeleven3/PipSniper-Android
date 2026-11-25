@@ -19,6 +19,7 @@ import androidx.lifecycle.lifecycleScope
 import com.apexquant.pipsniper.core.GeminiVisionClient
 import com.apexquant.pipsniper.core.MarketDataEngine
 import com.apexquant.pipsniper.core.PrefsManager
+import com.apexquant.pipsniper.core.TradeHistoryManager
 import com.apexquant.pipsniper.service.SniperWatcherService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -69,7 +70,6 @@ class ScanFragment : Fragment() {
             orientation = LinearLayout.VERTICAL
         }
 
-        // Dedicated Live Scanning Radar Display
         tvRadarBanner = TextView(requireContext()).apply {
             textSize = 13f
             setPadding(28, 22, 28, 22)
@@ -80,7 +80,6 @@ class ScanFragment : Fragment() {
         root.addView(tvRadarBanner)
         refreshRadarDisplay()
 
-        // Live Chart Section
         root.addView(sectionTitle("LIVE XAUUSDm • 1M CANDLESTICK CHART"))
         chartView = CandlestickChartView(requireContext()).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 460).apply {
@@ -92,7 +91,6 @@ class ScanFragment : Fragment() {
         val btnRefreshChart = styledButton("Refresh Live Chart", "#1C232D", "#D4AF37")
         root.addView(btnRefreshChart)
 
-        // Mode 1: AI Chart Scanner
         root.addView(sectionTitle("MODE 1 • AI CHART SCANNER"))
         val btnPick = styledButton("1. Upload TradingView / MT5 Screenshot", "#1C232D", "#F8FAFC")
         root.addView(btnPick)
@@ -197,22 +195,47 @@ class ScanFragment : Fragment() {
                 return@setOnClickListener
             }
             val dir = if (rbSell.isChecked) "SELL" else "BUY"
+            val historyId = TradeHistoryManager.recordNewTrade(
+                context = requireContext(),
+                source = "Manual Scan",
+                direction = dir,
+                entry = entry,
+                sl = sl,
+                tp = tp
+            )
+
             val obj = JSONObject().apply {
+                put("history_id", historyId)
                 put("direction", dir)
                 put("entry", entry)
                 put("sl", sl)
                 put("tp", tp)
                 put("tapped", false)
+                put("triggered", false)
+                put("created_ts", System.currentTimeMillis() / 1000L)
                 put("tap_ts", 0L)
             }
             prefs.setupsJson = JSONArray().apply { put(obj) }.toString()
             ContextCompat.startForegroundService(requireContext(), Intent(requireContext(), SniperWatcherService::class.java))
             refreshRadarDisplay()
-            tvStatus.text = "Trade scanning has begun! Watching 1m candles for $dir @ $entry..."
+            tvStatus.text = "Trade scanning has begun & logged to History! Watching 1m candles for $dir @ $entry..."
             loadChart(manual = false)
         }
 
         btnStop.setOnClickListener {
+            val existing = prefs.getSetups()
+            for (i in 0 until existing.length()) {
+                val s = existing.getJSONObject(i)
+                val hId = s.optString("history_id", "")
+                if (hId.isNotEmpty() && !s.optBoolean("triggered", false)) {
+                    TradeHistoryManager.updateTradeStatus(
+                        requireContext(),
+                        hId,
+                        "INVALID",
+                        "Stopped manually before 1m confirmation occurred"
+                    )
+                }
+            }
             prefs.setupsJson = "[]"
             if (!prefs.autoHunterEnabled) {
                 requireContext().stopService(Intent(requireContext(), SniperWatcherService::class.java))
@@ -242,7 +265,8 @@ class ScanFragment : Fragment() {
             val entry = s.optDouble("entry", 0.0)
             val sl = s.optDouble("sl", 0.0)
             val tp = s.optDouble("tp", 0.0)
-            tvRadarBanner.text = "● SCANNING FOR TRADE HAS BEGUN\nActive Setup: $dir @ $entry  |  SL: $sl  |  TP: $tp\nMonitoring live 1m candles in background..."
+            val stateLabel = if (s.optBoolean("triggered", false)) "LIVE IN TRADE (WATCHING TP/SL)" else "SCANNING FOR 1M CONFIRMATION"
+            tvRadarBanner.text = "● $stateLabel\nActive Setup: $dir @ $entry  |  SL: $sl  |  TP: $tp\nLogged in History • Monitoring live 1m candles..."
             tvRadarBanner.setTextColor(Color.parseColor("#10B981"))
             tvRadarBanner.background = GradientDrawable().apply {
                 setColor(Color.parseColor("#0D261E"))

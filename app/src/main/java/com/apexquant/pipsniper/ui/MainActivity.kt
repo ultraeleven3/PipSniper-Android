@@ -1,62 +1,136 @@
-package com.apexquant.pipsniper.ui
+package com.apexquant.pipsniper
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
-import com.apexquant.pipsniper.R
-import com.apexquant.pipsniper.core.MarketDataEngine
 import com.apexquant.pipsniper.core.PrefsManager
+import com.apexquant.pipsniper.ui.*
 import com.google.android.material.bottomnavigation.BottomNavigationView
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var prefs: PrefsManager
-    private lateinit var tvLiveTicker: TextView
+    private lateinit var tvPriceTicker: TextView
 
     private val scanFragment = ScanFragment()
-    private val hunterFragment = AutoHunterFragment()
+    private val autoHunterFragment = AutoHunterFragment()
+    private val historyFragment = HistoryFragment()
     private val toolsFragment = ToolsFragment()
     private val settingsFragment = SettingsFragment()
     private var activeFragment: Fragment = scanFragment
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
         prefs = PrefsManager(this)
-        tvLiveTicker = findViewById(R.id.tvLiveTicker)
-        val bottomNav = findViewById<BottomNavigationView>(R.id.bottomNav)
+        window.statusBarColor = Color.parseColor("#0B0E11")
+        window.navigationBarColor = Color.parseColor("#11161D")
 
-        requestNotificationPermission()
+        requestRuntimePermissions()
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#0B0E11"))
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        // Top Institutional Header Bar
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#11161D"))
+            setPadding(40, 32, 40, 28)
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val titleCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val tvTitle = TextView(this).apply {
+            text = "PIP SNIPER"
+            setTextColor(Color.parseColor("#D4AF37"))
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            letterSpacing = 0.12f
+        }
+        val tvSub = TextView(this).apply {
+            text = "INSTITUTIONAL XAUUSD TERMINAL"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 10f
+            letterSpacing = 0.08f
+        }
+        titleCol.addView(tvTitle)
+        titleCol.addView(tvSub)
+
+        tvPriceTicker = TextView(this).apply {
+            text = "XAUUSDm • ${prefs.lastPrice}"
+            setTextColor(Color.parseColor("#10B981"))
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+        }
+
+        header.addView(titleCol)
+        header.addView(tvPriceTicker)
+        root.addView(header)
+
+        // Fragment Container
+        val containerId = View.generateViewId()
+        val fragmentContainer = FrameLayout(this).apply {
+            id = containerId
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        root.addView(fragmentContainer)
+
+        // Bottom Navigation (5 Tabs including History)
+        val bottomNav = BottomNavigationView(this).apply {
+            setBackgroundColor(Color.parseColor("#11161D"))
+            itemIconTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#D4AF37"))
+            itemTextColor = android.content.res.ColorStateList.valueOf(Color.parseColor("#F8FAFC"))
+            menu.add(0, 1, 0, "Sniper Scan").setIcon(android.R.drawable.ic_menu_compass)
+            menu.add(0, 2, 1, "Auto Hunter").setIcon(android.R.drawable.ic_menu_manage)
+            menu.add(0, 3, 2, "History").setIcon(android.R.drawable.ic_menu_recent_history)
+            menu.add(0, 4, 3, "Pro Tools").setIcon(android.R.drawable.ic_menu_agenda)
+            menu.add(0, 5, 4, "Terminal").setIcon(android.R.drawable.ic_menu_preferences)
+        }
+        root.addView(bottomNav)
+        setContentView(root)
 
         if (savedInstanceState == null) {
             supportFragmentManager.beginTransaction()
-                .add(R.id.fragmentContainer, settingsFragment, "4").hide(settingsFragment)
-                .add(R.id.fragmentContainer, toolsFragment, "3").hide(toolsFragment)
-                .add(R.id.fragmentContainer, hunterFragment, "2").hide(hunterFragment)
-                .add(R.id.fragmentContainer, scanFragment, "1")
+                .add(containerId, settingsFragment, "5").hide(settingsFragment)
+                .add(containerId, toolsFragment, "4").hide(toolsFragment)
+                .add(containerId, historyFragment, "3").hide(historyFragment)
+                .add(containerId, autoHunterFragment, "2").hide(autoHunterFragment)
+                .add(containerId, scanFragment, "1")
                 .commit()
         }
 
         bottomNav.setOnItemSelectedListener { item ->
             val target = when (item.itemId) {
-                R.id.nav_scan -> scanFragment
-                R.id.nav_hunter -> hunterFragment
-                R.id.nav_tools -> toolsFragment
-                R.id.nav_settings -> settingsFragment
+                1 -> scanFragment
+                2 -> autoHunterFragment
+                3 -> historyFragment
+                4 -> toolsFragment
+                5 -> settingsFragment
                 else -> scanFragment
             }
             if (target != activeFragment) {
@@ -69,39 +143,18 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
-        startHeaderTickerLoop()
-    }
-
-    private fun startHeaderTickerLoop() {
-        lifecycleScope.launch(Dispatchers.IO) {
+        lifecycleScope.launch {
             while (isActive) {
-                try {
-                    val candles = MarketDataEngine.fetchCandles(
-                        symbol = prefs.symbol,
-                        interval = "1m",
-                        range = "1d",
-                        limit = 5
-                    )
-                    if (candles.isNotEmpty()) {
-                        val price = candles.last().close
-                        val formatted = String.format(Locale.US, "XAUUSDm %.2f", price)
-                        prefs.lastPrice = String.format(Locale.US, "%.2f", price)
-                        withContext(Dispatchers.Main) {
-                            tvLiveTicker.text = formatted
-                        }
-                    }
-                } catch (_: Exception) {}
-                delay(15_000)
+                tvPriceTicker.text = "${prefs.symbol} • ${prefs.lastPrice}"
+                delay(2000)
             }
         }
     }
 
-    private fun requestNotificationPermission() {
+    private fun requestRuntimePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
             }
         }
     }

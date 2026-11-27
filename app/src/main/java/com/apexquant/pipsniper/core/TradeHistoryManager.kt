@@ -1,32 +1,135 @@
-package com.apexquant.pipsniper.core
+package com.apexquant.pipsniper
 
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import java.util.UUID
+import kotlin.math.abs
+
+enum class TradeLedger(val key: String, val label: String) {
+    MANUAL("MANUAL", "My MT5 Journal"),
+    AI_SCAN("AI_SCAN", "AI Chart Scans"),
+    BOT_AUTO("BOT_AUTO", "Auto Hunter Bot");
+
+    companion object {
+        fun fromKey(key: String?): TradeLedger =
+            values().firstOrNull { it.key == key } ?: AI_SCAN
+    }
+}
 
 data class TradeRecord(
-    val id: String,
-    val timestamp: Long,
-    val source: String,      // "Manual Scan" or "Auto Hunter"
-    val direction: String,   // "BUY" or "SELL"
+    val id: String = UUID.randomUUID().toString(),
+    val ledger: TradeLedger = TradeLedger.AI_SCAN,
+    val symbol: String = "XAUUSDm",
+    val direction: String, // "BUY" or "SELL"
     val entry: Double,
     val sl: Double,
     val tp: Double,
-    val status: String,      // "SCANNING", "TRIGGERED", "TP_HIT", "SL_HIT", "INVALID"
-    val closeReason: String,
-    val closedAt: Long
-)
+    val lotSize: Double = 0.01,
+    val pnlUsd: Double? = null, // Optional exact USD P&L for manual MT5 trades
+    val status: String = "SCANNING", // SCANNING, TRIGGERED, TP_HIT, SL_HIT, BE, INVALID
+    val session: String = detectPktSession(System.currentTimeMillis()),
+    val strategyTag: String = "",
+    val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    val closedAt: Long? = null
+) {
+    fun riskPips(): Double = abs(entry - sl) * 10.0
 
-data class PeriodSummary(
-    val total: Int,
-    val tpHit: Int,
-    val slHit: Int,
-    val invalid: Int,
-    val active: Int
-)
+    fun rewardPips(): Double = abs(tp - entry) * 10.0
+
+    fun plannedRR(): Double {
+        val risk = abs(entry - sl)
+        return if (risk > 0.0001) abs(tp - entry) / risk else 0.0
+    }
+
+    fun realizedPips(): Double = when (status) {
+        "TP_HIT" -> rewardPips()
+        "SL_HIT" -> -riskPips()
+        else -> 0.0
+    }
+
+    fun realizedR(): Double = when (status) {
+        "TP_HIT" -> plannedRR()
+        "SL_HIT" -> -1.0
+        else -> 0.0
+    }
+
+    fun effectiveTimestamp(): Long = closedAt ?: createdAt
+
+    fun dayKey(): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        return sdf.format(Date(effectiveTimestamp()))
+    }
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("ledger", ledger.key)
+        put("symbol", symbol)
+        put("direction", direction)
+        put("entry", entry)
+        put("sl", sl)
+        put("tp", tp)
+        put("lotSize", lotSize)
+        if (pnlUsd != null) put("pnlUsd", pnlUsd)
+        put("status", status)
+        put("session", session)
+        put("strategyTag", strategyTag)
+        put("notes", notes)
+        put("createdAt", createdAt)
+        if (closedAt != null) put("closedAt", closedAt)
+    }
+
+    companion object {
+        fun detectPktSession(timestampMs: Long): String {
+            val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Karachi"))
+            cal.timeInMillis = timestampMs
+            val hour = cal.get(Calendar.HOUR_OF_DAY)
+            return when (hour) {
+                in 5..11 -> "Asian"
+                in 12..16 -> "London"
+                in 17..22 -> "New York"
+                else -> "Late NY"
+            }
+        }
+
+        fun fromJson(obj: JSONObject): TradeRecord {
+            // Backward compatibility with v1.3.0 records that used "source"
+            val ledgerKey = if (obj.has("ledger")) {
+                obj.optString("ledger")
+            } else {
+                when (obj.optString("source")) {
+                    "AUTO_HUNTER" -> TradeLedger.BOT_AUTO.key
+                    "MANUAL_JOURNAL" -> TradeLedger.MANUAL.key
+                    else -> TradeLedger.AI_SCAN.key
+                }
+            }
+            return TradeRecord(
+                id = obj.optString("id", UUID.randomUUID().toString()),
+                ledger = TradeLedger.fromKey(ledgerKey),
+                symbol = obj.optString("symbol", "XAUUSDm"),
+                direction = obj.optString("direction", "BUY"),
+                entry = obj.optDouble("entry", 0.0),
+                sl = obj.optDouble("sl", 0.0),
+                tp = obj.optDouble("tp", 0.0),
+                lotSize = obj.optDouble("lotSize", 0.01),
+                pnlUsd = if (obj.has("pnlUsd") && !obj.isNull("pnlUsd")) obj.optDouble("pnlUsd") else null,
+                status = obj.optString("status", "SCANNING"),
+                session = obj.optString("session", detectPktSession(obj.optLong("createdAt", System.currentTimeMillis()))),
+                strategyTag = obj.optString("strategyTag", obj.optString("closeReason", "")),
+                notes = obj.optString("notes", ""),
+                createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
+                closedAt = if (obj.has("closedAt") && !obj.isNull("closedAt")) obj.optLong("closedAt") else null
+            )
+        }
+    }
+}
 
 object TradeHistoryManager {
     private const val FILE_NAME = "trade_history_db.json"
@@ -34,130 +137,90 @@ object TradeHistoryManager {
 
     private fun getDbFile(context: Context): File = File(context.filesDir, FILE_NAME)
 
-    fun loadAll(context: Context): MutableList<TradeRecord> = synchronized(lock) {
+    fun getAllTrades(context: Context): List<TradeRecord> = synchronized(lock) {
         val file = getDbFile(context)
-        if (!file.exists()) return mutableListOf()
+        if (!file.exists()) return emptyList()
         return try {
             val arr = JSONArray(file.readText())
-            val list = mutableListOf<TradeRecord>()
+            val list = ArrayList<TradeRecord>(arr.length())
             for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                list.add(
-                    TradeRecord(
-                        id = o.optString("id", UUID.randomUUID().toString()),
-                        timestamp = o.optLong("timestamp", System.currentTimeMillis()),
-                        source = o.optString("source", "Manual Scan"),
-                        direction = o.optString("direction", "BUY"),
-                        entry = o.optDouble("entry", 0.0),
-                        sl = o.optDouble("sl", 0.0),
-                        tp = o.optDouble("tp", 0.0),
-                        status = o.optString("status", "SCANNING"),
-                        closeReason = o.optString("closeReason", "Awaiting 1m confirmation"),
-                        closedAt = o.optLong("closedAt", 0L)
-                    )
+                list.add(TradeRecord.fromJson(arr.getJSONObject(i)))
+            }
+            list.sortedByDescending { it.effectiveTimestamp() }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveAll(context: Context, trades: List<TradeRecord>) = synchronized(lock) {
+        val arr = JSONArray()
+        trades.forEach { arr.put(it.toJson()) }
+        getDbFile(context).writeText(arr.toString(2))
+    }
+
+    fun addTrade(context: Context, record: TradeRecord) {
+        val current = getAllTrades(context).toMutableList()
+        current.add(0, record)
+        saveAll(context, current)
+    }
+
+    fun updateTrade(context: Context, updated: TradeRecord) {
+        val current = getAllTrades(context).map { if (it.id == updated.id) updated else it }
+        saveAll(context, current)
+    }
+
+    fun updateStatus(context: Context, tradeId: String, newStatus: String, reason: String? = null) {
+        val current = getAllTrades(context).map { record ->
+            if (record.id == tradeId) {
+                val isTerminal = newStatus in listOf("TP_HIT", "SL_HIT", "BE", "INVALID")
+                record.copy(
+                    status = newStatus,
+                    strategyTag = reason ?: record.strategyTag,
+                    closedAt = if (isTerminal) (record.closedAt ?: System.currentTimeMillis()) else record.closedAt
+                )
+            } else record
+        }
+        saveAll(context, current)
+    }
+
+    fun deleteTrade(context: Context, tradeId: String) {
+        val current = getAllTrades(context).filterNot { it.id == tradeId }
+        saveAll(context, current)
+    }
+
+    fun promoteToManualJournal(context: Context, sourceRecord: TradeRecord) {
+        val cloned = sourceRecord.copy(
+            id = UUID.randomUUID().toString(),
+            ledger = TradeLedger.MANUAL,
+            strategyTag = "Promoted from ${sourceRecord.ledger.label}",
+            createdAt = System.currentTimeMillis(),
+            closedAt = if (sourceRecord.status in listOf("TP_HIT", "SL_HIT", "BE")) System.currentTimeMillis() else null
+        )
+        addTrade(context, cloned)
+    }
+
+    fun exportToCsv(context: Context, ledger: TradeLedger): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        val sb = StringBuilder()
+        sb.appendLine("Date,Ledger,Symbol,Direction,Entry,SL,TP,LotSize,Status,NetPips,NetR,PnL_USD,Session,Strategy,Notes")
+        getAllTrades(context)
+            .filter { it.ledger == ledger }
+            .forEach { t ->
+                val dateStr = sdf.format(Date(t.effectiveTimestamp()))
+                val safeNotes = t.notes.replace(",", ";").replace("\n", " ")
+                val safeStrat = t.strategyTag.replace(",", ";")
+                sb.appendLine(
+                    "$dateStr,${t.ledger.label},${t.symbol},${t.direction}," +
+                    "${String.format(Locale.US, "%.2f", t.entry)}," +
+                    "${String.format(Locale.US, "%.2f", t.sl)}," +
+                    "${String.format(Locale.US, "%.2f", t.tp)}," +
+                    "${t.lotSize},${t.status}," +
+                    "${String.format(Locale.US, "%.1f", t.realizedPips())}," +
+                    "${String.format(Locale.US, "%.2f", t.realizedR())}," +
+                    "${t.pnlUsd ?: ""}," +
+                    "${t.session},$safeStrat,$safeNotes"
                 )
             }
-            list.sortByDescending { it.timestamp }
-            list
-        } catch (_: Exception) {
-            mutableListOf()
-        }
-    }
-
-    private fun saveAll(context: Context, list: List<TradeRecord>) = synchronized(lock) {
-        val arr = JSONArray()
-        for (r in list) {
-            arr.put(JSONObject().apply {
-                put("id", r.id)
-                put("timestamp", r.timestamp)
-                put("source", r.source)
-                put("direction", r.direction)
-                put("entry", r.entry)
-                put("sl", r.sl)
-                put("tp", r.tp)
-                put("status", r.status)
-                put("closeReason", r.closeReason)
-                put("closedAt", r.closedAt)
-            })
-        }
-        getDbFile(context).writeText(arr.toString())
-    }
-
-    fun recordNewTrade(
-        context: Context,
-        source: String,
-        direction: String,
-        entry: Double,
-        sl: Double,
-        tp: Double,
-        initialStatus: String = "SCANNING",
-        initialReason: String = "Scanning for 1m confirmation"
-    ): String {
-        val id = UUID.randomUUID().toString()
-        val list = loadAll(context)
-        list.add(
-            0,
-            TradeRecord(
-                id = id,
-                timestamp = System.currentTimeMillis(),
-                source = source,
-                direction = direction,
-                entry = entry,
-                sl = sl,
-                tp = tp,
-                status = initialStatus,
-                closeReason = initialReason,
-                closedAt = 0L
-            )
-        )
-        saveAll(context, list)
-        return id
-    }
-
-    fun updateTradeStatus(context: Context, id: String, newStatus: String, reason: String) {
-        if (id.isEmpty()) return
-        val list = loadAll(context)
-        val idx = list.indexOfFirst { it.id == id }
-        if (idx != -1) {
-            val old = list[idx]
-            val isTerminal = newStatus in listOf("TP_HIT", "SL_HIT", "INVALID")
-            list[idx] = old.copy(
-                status = newStatus,
-                closeReason = reason,
-                closedAt = if (isTerminal) System.currentTimeMillis() else old.closedAt
-            )
-            saveAll(context, list)
-        }
-    }
-
-    fun computeSummaries(records: List<TradeRecord>): Triple<PeriodSummary, PeriodSummary, PeriodSummary> {
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val startOfDay = cal.timeInMillis
-        val sevenDaysAgo = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
-        val thirtyDaysAgo = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000
-
-        fun summarize(subset: List<TradeRecord>) = PeriodSummary(
-            total = subset.size,
-            tpHit = subset.count { it.status == "TP_HIT" },
-            slHit = subset.count { it.status == "SL_HIT" },
-            invalid = subset.count { it.status == "INVALID" },
-            active = subset.count { it.status == "SCANNING" || it.status == "TRIGGERED" }
-        )
-
-        return Triple(
-            summarize(records.filter { it.timestamp >= startOfDay }),
-            summarize(records.filter { it.timestamp >= sevenDaysAgo }),
-            summarize(records.filter { it.timestamp >= thirtyDaysAgo })
-        )
-    }
-
-    fun formatTimestamp(ts: Long): String {
-        val sdf = SimpleDateFormat("dd MMM yyyy • hh:mm a", Locale.US)
-        return sdf.format(Date(ts))
+        return sb.toString()
     }
 }

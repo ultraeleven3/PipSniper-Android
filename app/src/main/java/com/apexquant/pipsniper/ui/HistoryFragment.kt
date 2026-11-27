@@ -1,262 +1,366 @@
 package com.apexquant.pipsniper.ui
 
+import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import androidx.fragment.app.Fragment
-import com.apexquant.pipsniper.core.PeriodSummary
-import com.apexquant.pipsniper.core.TradeHistoryManager
-import com.apexquant.pipsniper.core.TradeRecord
+import com.apexquant.pipsniper.R
+import com.apexquant.pipsniper.core.*
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class HistoryFragment : Fragment() {
 
-    private lateinit var summaryContainer: LinearLayout
-    private lateinit var filterRow: LinearLayout
-    private lateinit var tradesContainer: LinearLayout
-    private var selectedFilter = "TODAY"
+    private var activeLedger: TradeLedger = TradeLedger.MANUAL
+    private val displayedMonth: Calendar = Calendar.getInstance()
+    private var selectedDayKey: String? = null
 
-    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        val ctx = requireContext()
-        val scroll = ScrollView(ctx).apply {
-            setBackgroundColor(Color.parseColor("#0B0E11"))
-            setPadding(32, 24, 32, 32)
+    private lateinit var tabManual: TextView
+    private lateinit var tabScan: TextView
+    private lateinit var tabBot: TextView
+    private lateinit var tvWinRate: TextView
+    private lateinit var tvNetPnl: TextView
+    private lateinit var tvNetR: TextView
+    private lateinit var tvRecord: TextView
+    private lateinit var tvMonthTitle: TextView
+    private lateinit var calendarView: PnlCalendarView
+    private lateinit var tvListHeader: TextView
+    private lateinit var tvClearDay: TextView
+    private lateinit var cardsContainer: LinearLayout
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+        val view = inflater.inflate(R.layout.fragment_history, container, false)
+
+        tabManual = view.findViewById(R.id.tabLedgerManual)
+        tabScan = view.findViewById(R.id.tabLedgerScan)
+        tabBot = view.findViewById(R.id.tabLedgerBot)
+        tvWinRate = view.findViewById(R.id.tvKpiWinRate)
+        tvNetPnl = view.findViewById(R.id.tvKpiNetPnl)
+        tvNetR = view.findViewById(R.id.tvKpiNetR)
+        tvRecord = view.findViewById(R.id.tvKpiRecord)
+        tvMonthTitle = view.findViewById(R.id.tvCalendarMonthTitle)
+        calendarView = view.findViewById(R.id.pnlCalendarView)
+        tvListHeader = view.findViewById(R.id.tvTradeListHeader)
+        tvClearDay = view.findViewById(R.id.tvClearDayFilter)
+        cardsContainer = view.findViewById(R.id.tradeCardsContainer)
+
+        tabManual.setOnClickListener { switchLedger(TradeLedger.MANUAL) }
+        tabScan.setOnClickListener { switchLedger(TradeLedger.AI_SCAN) }
+        tabBot.setOnClickListener { switchLedger(TradeLedger.BOT_AUTO) }
+
+        view.findViewById<Button>(R.id.btnPrevMonth).setOnClickListener {
+            displayedMonth.add(Calendar.MONTH, -1)
+            selectedDayKey = null
+            refreshDashboard()
         }
 
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
+        view.findViewById<Button>(R.id.btnNextMonth).setOnClickListener {
+            displayedMonth.add(Calendar.MONTH, 1)
+            selectedDayKey = null
+            refreshDashboard()
         }
 
-        val headerRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 16
+        tvClearDay.setOnClickListener {
+            selectedDayKey = null
+            refreshDashboard()
+        }
+
+        calendarView.onDaySelected = { dayKey ->
+            selectedDayKey = dayKey
+            refreshDashboard()
+        }
+
+        view.findViewById<Button>(R.id.btnLogManualTrade).setOnClickListener {
+            showManualTradeDialog()
+        }
+
+        view.findViewById<Button>(R.id.btnExportCsv).setOnClickListener {
+            val csv = TradeHistoryManager.exportToCsv(requireContext(), activeLedger)
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/csv"
+                putExtra(Intent.EXTRA_SUBJECT, "PipSniper_${activeLedger.key}_Ledger.csv")
+                putExtra(Intent.EXTRA_TEXT, csv)
             }
+            startActivity(Intent.createChooser(sendIntent, "Export ${activeLedger.label} CSV"))
         }
-        val title = TextView(ctx).apply {
-            text = "UNLIMITED TRADE LEDGER & ANALYTICS"
-            setTextColor(Color.parseColor("#D4AF37"))
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val btnRefresh = TextView(ctx).apply {
-            text = "Refresh"
-            setTextColor(Color.parseColor("#10B981"))
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-            setPadding(16, 4, 8, 4)
-            setOnClickListener { renderAll() }
-        }
-        headerRow.addView(title)
-        headerRow.addView(btnRefresh)
-        root.addView(headerRow)
 
-        summaryContainer = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 20
-            }
-        }
-        root.addView(summaryContainer)
-
-        filterRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 18
-            }
-        }
-        val filters = listOf("TODAY" to "Today", "WEEK" to "7 Days", "MONTH" to "30 Days", "ALL" to "All Years")
-        filters.forEach { (code, label) ->
-            val pill = TextView(ctx).apply {
-                text = label
-                textSize = 12f
-                gravity = Gravity.CENTER
-                setPadding(12, 18, 12, 18)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    marginEnd = 8
-                }
-                setOnClickListener {
-                    selectedFilter = code
-                    renderAll()
-                }
-            }
-            pill.tag = code
-            filterRow.addView(pill)
-        }
-        root.addView(filterRow)
-
-        tradesContainer = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        root.addView(tradesContainer)
-
-        scroll.addView(root)
-        renderAll()
-        return scroll
-    }
-
-    override fun onHiddenChanged(hidden: Boolean) {
-        super.onHiddenChanged(hidden)
-        if (!hidden) renderAll()
+        switchLedger(TradeLedger.MANUAL)
+        return view
     }
 
     override fun onResume() {
         super.onResume()
-        renderAll()
+        refreshDashboard()
     }
 
-    private fun renderAll() {
-        if (!isAdded || !::summaryContainer.isInitialized) return
+    private fun switchLedger(ledger: TradeLedger) {
+        activeLedger = ledger
+        selectedDayKey = null
+
+        val tabs = listOf(
+            tabManual to TradeLedger.MANUAL,
+            tabScan to TradeLedger.AI_SCAN,
+            tabBot to TradeLedger.BOT_AUTO
+        )
+        for ((tv, item) in tabs) {
+            if (item == ledger) {
+                tv.setBackgroundColor(Color.parseColor("#F5B041"))
+                tv.setTextColor(Color.parseColor("#0B0E14"))
+            } else {
+                tv.setBackgroundColor(Color.TRANSPARENT)
+                tv.setTextColor(Color.parseColor("#9CA3AF"))
+            }
+        }
+        refreshDashboard()
+    }
+
+    private fun refreshDashboard() {
+        val ctx = context ?: return
+        val year = displayedMonth.get(Calendar.YEAR)
+        val month = displayedMonth.get(Calendar.MONTH)
+        val monthPrefix = String.format(Locale.US, "%04d-%02d", year, month + 1)
+
+        val monthFormatter = SimpleDateFormat("MMMM yyyy", Locale.US)
+        tvMonthTitle.text = monthFormatter.format(displayedMonth.time)
+
+        val ledgerTrades = TradeHistoryManager.getAllTrades(ctx)
+            .filter { it.ledger == activeLedger }
+
+        val monthTrades = ledgerTrades.filter { it.dayKey().startsWith(monthPrefix) }
+
+        val dayMap = mutableMapOf<String, DayPnlSummary>()
+        for (trade in monthTrades) {
+            val key = trade.dayKey()
+            val prev = dayMap[key]
+            val pips = trade.realizedPips()
+            val usd = trade.pnlUsd ?: 0.0
+            val hasUsd = (trade.pnlUsd != null) || (prev?.hasUsd == true)
+            val winInc = if (trade.status == "TP_HIT") 1 else 0
+            val lossInc = if (trade.status == "SL_HIT") 1 else 0
+
+            dayMap[key] = DayPnlSummary(
+                dayKey = key,
+                netPips = (prev?.netPips ?: 0.0) + pips,
+                netUsd = (prev?.netUsd ?: 0.0) + usd,
+                hasUsd = hasUsd,
+                tradeCount = (prev?.tradeCount ?: 0) + 1,
+                wins = (prev?.wins ?: 0) + winInc,
+                losses = (prev?.losses ?: 0) + lossInc
+            )
+        }
+
+        calendarView.setMonthData(year, month, dayMap, selectedDayKey)
+
+        val scopeTrades = if (selectedDayKey != null) {
+            monthTrades.filter { it.dayKey() == selectedDayKey }
+        } else {
+            monthTrades
+        }
+
+        val wins = scopeTrades.count { it.status == "TP_HIT" }
+        val losses = scopeTrades.count { it.status == "SL_HIT" }
+        val decided = wins + losses
+        val winRate = if (decided > 0) (wins.toDouble() / decided) * 100.0 else 0.0
+        val totalPips = scopeTrades.sumOf { it.realizedPips() }
+        val totalR = scopeTrades.sumOf { it.realizedR() }
+        val totalUsd = scopeTrades.mapNotNull { it.pnlUsd }.sum()
+        val anyUsd = scopeTrades.any { it.pnlUsd != null }
+
+        tvWinRate.text = String.format(Locale.US, "%.1f%%", winRate)
+        tvRecord.text = "${wins}W - ${losses}L"
+        tvNetR.text = String.format(Locale.US, "%+.2fR", totalR)
+        tvNetPnl.text = if (anyUsd) {
+            String.format(Locale.US, "%+.0fp ($%+.2f)", totalPips, totalUsd)
+        } else {
+            String.format(Locale.US, "%+.1fp", totalPips)
+        }
+        tvNetPnl.setTextColor(
+            if (totalPips >= 0) Color.parseColor("#10B981") else Color.parseColor("#EF4444")
+        )
+
+        if (selectedDayKey != null) {
+            tvListHeader.text = "TRADES ON $selectedDayKey (${scopeTrades.size})"
+            tvClearDay.visibility = View.VISIBLE
+        } else {
+            tvListHeader.text = "${activeLedger.label.uppercase(Locale.US)} — ${monthFormatter.format(displayedMonth.time).uppercase(Locale.US)} (${scopeTrades.size})"
+            tvClearDay.visibility = View.GONE
+        }
+
+        renderTradeCards(scopeTrades)
+    }
+
+    private fun renderTradeCards(trades: List<TradeRecord>) {
+        cardsContainer.removeAllViews()
         val ctx = context ?: return
 
-        val records = TradeHistoryManager.loadAll(ctx)
-        val (todaySum, weekSum, monthSum) = TradeHistoryManager.computeSummaries(records)
-
-        summaryContainer.removeAllViews()
-        summaryContainer.addView(buildSummaryCard("TODAY'S TRADES SUMMARY", todaySum, "#D4AF37"))
-        summaryContainer.addView(buildSummaryCard("THIS WEEK (LAST 7 DAYS)", weekSum, "#38BDF8"))
-        summaryContainer.addView(buildSummaryCard("THIS MONTH (LAST 30 DAYS)", monthSum, "#A78BFA"))
-
-        for (i in 0 until filterRow.childCount) {
-            val pill = filterRow.getChildAt(i) as? TextView ?: continue
-            val isSel = pill.tag == selectedFilter
-            pill.setTextColor(if (isSel) Color.parseColor("#0B0E11") else Color.parseColor("#94A3B8"))
-            pill.setTypeface(null, if (isSel) Typeface.BOLD else Typeface.NORMAL)
-            pill.background = GradientDrawable().apply {
-                setColor(if (isSel) Color.parseColor("#D4AF37") else Color.parseColor("#141920"))
-                cornerRadius = 14f
-            }
-        }
-
-        val now = System.currentTimeMillis()
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val filtered = when (selectedFilter) {
-            "TODAY" -> records.filter { it.timestamp >= cal.timeInMillis }
-            "WEEK" -> records.filter { it.timestamp >= now - 7L * 24 * 60 * 60 * 1000 }
-            "MONTH" -> records.filter { it.timestamp >= now - 30L * 24 * 60 * 60 * 1000 }
-            else -> records
-        }
-
-        tradesContainer.removeAllViews()
-        val countHeader = TextView(ctx).apply {
-            text = "SHOWING ${filtered.size} RECORD(S) • TOTAL STORED: ${records.size}"
-            setTextColor(Color.parseColor("#64748B"))
-            textSize = 11f
-            setPadding(0, 4, 0, 14)
-        }
-        tradesContainer.addView(countHeader)
-
-        if (filtered.isEmpty()) {
-            val emptyCard = TextView(ctx).apply {
-                text = "No trades recorded in this period yet.\nArm a setup in Scan or enable Hunter to log trades automatically."
-                setTextColor(Color.parseColor("#94A3B8"))
-                setBackgroundColor(Color.parseColor("#141920"))
-                setPadding(28, 28, 28, 28)
+        if (trades.isEmpty()) {
+            val emptyTv = TextView(ctx).apply {
+                text = "No trades logged in ${activeLedger.label} for this selection."
+                setTextColor(Color.parseColor("#6B7280"))
                 textSize = 13f
+                setPadding(12, 32, 12, 32)
             }
-            tradesContainer.addView(emptyCard)
+            cardsContainer.addView(emptyTv)
             return
         }
 
-        for (trade in filtered) {
-            tradesContainer.addView(buildTradeCard(trade))
+        val timeFmt = SimpleDateFormat("dd MMM • HH:mm", Locale.US)
+
+        for (trade in trades) {
+            val card = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.parseColor("#131722"))
+                setPadding(32, 26, 32, 26)
+                val params = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                params.bottomMargin = 18
+                layoutParams = params
+            }
+
+            val topRow = TextView(ctx).apply {
+                val badgeColor = if (trade.direction == "BUY") "#10B981" else "#EF4444"
+                setTextColor(Color.parseColor(badgeColor))
+                textSize = 13.5f
+                paint.isFakeBoldText = true
+                text = "${trade.direction} ${trade.symbol}  •  [${trade.status}]  •  ${trade.session}"
+            }
+
+            val levelsRow = TextView(ctx).apply {
+                setTextColor(Color.parseColor("#E5E7EB"))
+                textSize = 12.5f
+                setPadding(0, 8, 0, 4)
+                val pnlStr = when {
+                    trade.pnlUsd != null -> String.format(Locale.US, " | P&L: $%+.2f", trade.pnlUsd)
+                    trade.status in listOf("TP_HIT", "SL_HIT") -> String.format(Locale.US, " | %+.1f pips (%.2fR)", trade.realizedPips(), trade.realizedR())
+                    else -> String.format(Locale.US, " | R:R 1:%.2f", trade.plannedRR())
+                }
+                text = "Entry: ${trade.entry}  |  SL: ${trade.sl}  |  TP: ${trade.tp}$pnlStr"
+            }
+
+            val metaRow = TextView(ctx).apply {
+                setTextColor(Color.parseColor("#8A94A6"))
+                textSize = 11f
+                val notePreview = if (trade.notes.isNotBlank()) " • ${trade.notes}" else ""
+                text = "${timeFmt.format(Date(trade.effectiveTimestamp()))} • Lot ${trade.lotSize}$notePreview"
+            }
+
+            card.addView(topRow)
+            card.addView(levelsRow)
+            card.addView(metaRow)
+
+            card.setOnClickListener { showTradeActionDialog(trade) }
+            cardsContainer.addView(card)
         }
     }
 
-    private fun buildSummaryCard(title: String, sum: PeriodSummary, accentHex: String): View {
-        val ctx = requireContext()
-        val card = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 20, 24, 20)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#141920"))
-                cornerRadius = 18f
-                setStroke(2, Color.parseColor("#242E3B"))
-            }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 12
-            }
+    private fun showTradeActionDialog(trade: TradeRecord) {
+        val ctx = context ?: return
+        val options = mutableListOf(
+            "Mark TP Hit (+${String.format(Locale.US, "%.0f", trade.rewardPips())}p)",
+            "Mark SL Hit (-${String.format(Locale.US, "%.0f", trade.riskPips())}p)",
+            "Mark Breakeven (BE)",
+            "Mark Invalid / Cancelled"
+        )
+        if (trade.ledger != TradeLedger.MANUAL) {
+            options.add("Copy to My MT5 Journal")
         }
+        options.add("Delete Record")
 
-        val header = TextView(ctx).apply {
-            text = "$title  •  Total: ${sum.total}"
-            setTextColor(Color.parseColor(accentHex))
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 10)
-        }
-        card.addView(header)
-
-        val stats = TextView(ctx).apply {
-            text = "TP Hit: ${sum.tpHit}   |   SL Hit: ${sum.slHit}   |   Invalid: ${sum.invalid}   |   Live: ${sum.active}"
-            setTextColor(Color.parseColor("#F8FAFC"))
-            textSize = 12f
-        }
-        card.addView(stats)
-        return card
+        AlertDialog.Builder(ctx)
+            .setTitle("${trade.direction} ${trade.symbol} @ ${trade.entry}")
+            .setItems(options.toTypedArray()) { _, which ->
+                val choice = options[which]
+                when {
+                    choice.startsWith("Mark TP") -> TradeHistoryManager.updateStatus(ctx, trade.id, "TP_HIT")
+                    choice.startsWith("Mark SL") -> TradeHistoryManager.updateStatus(ctx, trade.id, "SL_HIT")
+                    choice.startsWith("Mark Breakeven") -> TradeHistoryManager.updateStatus(ctx, trade.id, "BE")
+                    choice.startsWith("Mark Invalid") -> TradeHistoryManager.updateStatus(ctx, trade.id, "INVALID")
+                    choice.startsWith("Copy to My MT5") -> {
+                        TradeHistoryManager.promoteToManualJournal(ctx, trade)
+                        Toast.makeText(ctx, "Copied to My MT5 Journal", Toast.LENGTH_SHORT).show()
+                    }
+                    choice == "Delete Record" -> TradeHistoryManager.deleteTrade(ctx, trade.id)
+                }
+                refreshDashboard()
+            }
+            .show()
     }
 
-    private fun buildTradeCard(t: TradeRecord): View {
-        val ctx = requireContext()
-        val (badgeText, badgeColor, borderColor) = when (t.status) {
-            "TP_HIT" -> Triple("TP HIT", "#10B981", "#10B981")
-            "SL_HIT" -> Triple("SL HIT", "#EF4444", "#EF4444")
-            "INVALID" -> Triple("INVALID (NO CONFIRMATION)", "#F59E0B", "#F59E0B")
-            "TRIGGERED" -> Triple("LIVE IN TRADE", "#38BDF8", "#38BDF8")
-            else -> Triple("SCANNING CONFIRMATION", "#D4AF37", "#283240")
-        }
-
-        val card = LinearLayout(ctx).apply {
+    private fun showManualTradeDialog() {
+        val ctx = context ?: return
+        val container = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(26, 22, 26, 22)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#141920"))
-                cornerRadius = 18f
-                setStroke(2, Color.parseColor(borderColor))
+            setPadding(48, 32, 48, 16)
+        }
+
+        val dirSpinner = Spinner(ctx).apply {
+            adapter = ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, listOf("BUY", "SELL"))
+        }
+        val statusSpinner = Spinner(ctx).apply {
+            adapter = ArrayAdapter(ctx, android.R.layout.simple_spinner_dropdown_item, listOf("TP_HIT", "SL_HIT", "BE", "TRIGGERED"))
+        }
+        val etEntry = EditText(ctx).apply { hint = "Entry Price (e.g. 3702.50)" }
+        val etSl = EditText(ctx).apply { hint = "Stop Loss (e.g. 3699.50)" }
+        val etTp = EditText(ctx).apply { hint = "Take Profit (e.g. 3714.50)" }
+        val etLot = EditText(ctx).apply { hint = "Lot Size (default 0.01)" }
+        val etUsd = EditText(ctx).apply { hint = "Exact Net Profit/Loss USD (optional, e.g. 12.50 or -6.00)" }
+        val etNotes = EditText(ctx).apply { hint = "Setup / Notes (e.g. London Liquidity Sweep)" }
+
+        container.addView(dirSpinner)
+        container.addView(statusSpinner)
+        container.addView(etEntry)
+        container.addView(etSl)
+        container.addView(etTp)
+        container.addView(etLot)
+        container.addView(etUsd)
+        container.addView(etNotes)
+
+        AlertDialog.Builder(ctx)
+            .setTitle("Log Executed MT5 Trade")
+            .setView(container)
+            .setPositiveButton("Save to My MT5 Journal") { _, _ ->
+                val entry = etEntry.text.toString().toDoubleOrNull() ?: return@setPositiveButton
+                val sl = etSl.text.toString().toDoubleOrNull() ?: return@setPositiveButton
+                val tp = etTp.text.toString().toDoubleOrNull() ?: return@setPositiveButton
+                val lot = etLot.text.toString().toDoubleOrNull() ?: 0.01
+                val usd = etUsd.text.toString().toDoubleOrNull()
+                val status = statusSpinner.selectedItem.toString()
+
+                val record = TradeRecord(
+                    ledger = TradeLedger.MANUAL,
+                    direction = dirSpinner.selectedItem.toString(),
+                    entry = entry,
+                    sl = sl,
+                    tp = tp,
+                    lotSize = lot,
+                    pnlUsd = usd,
+                    status = status,
+                    notes = etNotes.text.toString().trim(),
+                    closedAt = if (status in listOf("TP_HIT", "SL_HIT", "BE")) System.currentTimeMillis() else null
+                )
+                TradeHistoryManager.addTrade(ctx, record)
+                switchLedger(TradeLedger.MANUAL)
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = 14
-            }
-        }
-
-        val topRow = TextView(ctx).apply {
-            val dirColorTag = if (t.direction == "BUY") "LONG (BUY)" else "SHORT (SELL)"
-            text = "$dirColorTag  •  $badgeText"
-            setTextColor(Color.parseColor(badgeColor))
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-        }
-        card.addView(topRow)
-
-        val levelsRow = TextView(ctx).apply {
-            text = "Entry: ${t.entry}   |   SL: ${t.sl}   |   TP: ${t.tp}"
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            setPadding(0, 10, 0, 8)
-        }
-        card.addView(levelsRow)
-
-        val metaRow = TextView(ctx).apply {
-            text = "${t.source} • ${TradeHistoryManager.formatTimestamp(t.timestamp)}\nNote: ${t.closeReason}"
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 12f
-        }
-        card.addView(metaRow)
-
-        return card
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 }

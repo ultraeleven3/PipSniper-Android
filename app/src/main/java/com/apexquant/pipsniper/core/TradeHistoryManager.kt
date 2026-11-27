@@ -1,4 +1,4 @@
-package com.apexquant.pipsniper
+package com.apexquant.pipsniper.core
 
 import android.content.Context
 import org.json.JSONArray

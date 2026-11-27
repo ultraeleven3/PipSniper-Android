@@ -1,4 +1,4 @@
-package com.apexquant.pipsniper
+package com.apexquant.pipsniper.ui
 
 import android.content.Context
 import android.graphics.Canvas

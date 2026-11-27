@@ -27,13 +27,13 @@ data class TradeRecord(
     val id: String = UUID.randomUUID().toString(),
     val ledger: TradeLedger = TradeLedger.AI_SCAN,
     val symbol: String = "XAUUSDm",
-    val direction: String, // "BUY" or "SELL"
+    val direction: String,
     val entry: Double,
     val sl: Double,
     val tp: Double,
     val lotSize: Double = 0.01,
-    val pnlUsd: Double? = null, // Optional exact USD P&L for manual MT5 trades
-    val status: String = "SCANNING", // SCANNING, TRIGGERED, TP_HIT, SL_HIT, BE, INVALID
+    val pnlUsd: Double? = null,
+    val status: String = "SCANNING",
     val session: String = detectPktSession(System.currentTimeMillis()),
     val strategyTag: String = "",
     val notes: String = "",
@@ -100,13 +100,12 @@ data class TradeRecord(
         }
 
         fun fromJson(obj: JSONObject): TradeRecord {
-            // Backward compatibility with v1.3.0 records that used "source"
             val ledgerKey = if (obj.has("ledger")) {
                 obj.optString("ledger")
             } else {
-                when (obj.optString("source")) {
-                    "AUTO_HUNTER" -> TradeLedger.BOT_AUTO.key
-                    "MANUAL_JOURNAL" -> TradeLedger.MANUAL.key
+                when {
+                    obj.optString("source").contains("Auto", ignoreCase = true) -> TradeLedger.BOT_AUTO.key
+                    obj.optString("source").contains("Manual Journal", ignoreCase = true) -> TradeLedger.MANUAL.key
                     else -> TradeLedger.AI_SCAN.key
                 }
             }
@@ -156,6 +155,40 @@ object TradeHistoryManager {
         val arr = JSONArray()
         trades.forEach { arr.put(it.toJson()) }
         getDbFile(context).writeText(arr.toString(2))
+    }
+
+    fun recordNewTrade(
+        context: Context,
+        source: String,
+        direction: String,
+        entry: Double,
+        sl: Double,
+        tp: Double
+    ): String {
+        val targetLedger = when {
+            source.contains("Auto", ignoreCase = true) || source.contains("Bot", ignoreCase = true) -> TradeLedger.BOT_AUTO
+            source.contains("Journal", ignoreCase = true) -> TradeLedger.MANUAL
+            else -> TradeLedger.AI_SCAN
+        }
+        val record = TradeRecord(
+            ledger = targetLedger,
+            direction = direction,
+            entry = entry,
+            sl = sl,
+            tp = tp,
+            strategyTag = source
+        )
+        addTrade(context, record)
+        return record.id
+    }
+
+    fun updateTradeStatus(
+        context: Context,
+        tradeId: String,
+        newStatus: String,
+        reason: String? = null
+    ) {
+        updateStatus(context, tradeId, newStatus, reason)
     }
 
     fun addTrade(context: Context, record: TradeRecord) {

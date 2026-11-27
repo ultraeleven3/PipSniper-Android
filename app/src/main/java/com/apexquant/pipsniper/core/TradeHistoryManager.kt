@@ -157,13 +157,15 @@ object TradeHistoryManager {
         getDbFile(context).writeText(arr.toString(2))
     }
 
-    fun recordNewTrade(
+fun recordNewTrade(
         context: Context,
         source: String,
         direction: String,
         entry: Double,
         sl: Double,
-        tp: Double
+        tp: Double,
+        initialStatus: String = "SCANNING",
+        initialReason: String = ""
     ): String {
         val targetLedger = when {
             source.contains("Auto", ignoreCase = true) || source.contains("Bot", ignoreCase = true) -> TradeLedger.BOT_AUTO
@@ -176,7 +178,8 @@ object TradeHistoryManager {
             entry = entry,
             sl = sl,
             tp = tp,
-            strategyTag = source
+            status = initialStatus,
+            strategyTag = if (initialReason.isNotBlank()) initialReason else source
         )
         addTrade(context, record)
         return record.id

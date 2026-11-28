@@ -11,7 +11,7 @@
         android:orientation="vertical"
         android:padding="14dp">
 
-        <!-- Header + Export -->
+        <!-- Header + Quick Log + Export -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -34,7 +34,7 @@
                 android:layout_height="36dp"
                 android:layout_marginEnd="6dp"
                 android:backgroundTint="#F5B041"
-                android:text="+ Log MT5"
+                android:text="+ Log Trade"
                 android:textAllCaps="false"
                 android:textColor="#0B0E14"
                 android:textSize="12sp"
@@ -134,7 +134,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="NET PIPS / USD"
+                    android:text="NET USD / PIPS"
                     android:textColor="#8A94A6"
                     android:textSize="10sp" />
                 <TextView
@@ -142,7 +142,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="0p"
+                    android:text="$0.00"
                     android:textColor="#10B981"
                     android:textSize="15sp"
                     android:textStyle="bold" />
@@ -195,7 +195,95 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Monthly P&L Calendar Header -->
+        <!-- Goals & Risk Guardrails Card -->
+        <LinearLayout
+            android:id="@+id/goalsCardContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="#131722"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="TARGETS &amp; RISK GUARDRAILS (USD)"
+                    android:textColor="#F5B041"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/btnEditGoals"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="#1E2433"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="4dp"
+                    android:text="Edit Goals"
+                    android:textColor="#E5E7EB"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvDailyTargetStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Today Target: $0.00 / $50.00"
+                android:textColor="#D1D5DB"
+                android:textSize="12sp" />
+
+            <ProgressBar
+                android:id="@+id/pbDailyTarget"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:layout_marginTop="4dp"
+                android:max="100"
+                android:progress="0"
+                android:progressBackgroundTint="#1E2433"
+                android:progressTint="#10B981" />
+
+            <TextView
+                android:id="@+id/tvMonthlyTargetStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Monthly Target: $0.00 / $1,000.00"
+                android:textColor="#D1D5DB"
+                android:textSize="12sp" />
+
+            <ProgressBar
+                android:id="@+id/pbMonthlyTarget"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:layout_marginTop="4dp"
+                android:max="100"
+                android:progress="0"
+                android:progressBackgroundTint="#1E2433"
+                android:progressTint="#F5B041" />
+
+            <TextView
+                android:id="@+id/tvGuardrailWarning"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Daily Risk: $0.00 / -$30.00 max loss • 0 / 3 trades today"
+                android:textColor="#9CA3AF"
+                android:textSize="11.5sp" />
+        </LinearLayout>
+
+        <!-- Multi-Scale P&L Calendar Header (Day / Month / Year) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -208,7 +296,7 @@
 
             <Button
                 android:id="@+id/btnPrevMonth"
-                android:layout_width="40dp"
+                android:layout_width="38dp"
                 android:layout_height="34dp"
                 android:backgroundTint="#1E2433"
                 android:padding="0dp"
@@ -229,7 +317,7 @@
 
             <Button
                 android:id="@+id/btnNextMonth"
-                android:layout_width="40dp"
+                android:layout_width="38dp"
                 android:layout_height="34dp"
                 android:backgroundTint="#1E2433"
                 android:padding="0dp"
@@ -238,11 +326,64 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <!-- Day / Month / Year Scale Toggle -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="32dp"
+            android:background="#0F131C"
+            android:orientation="horizontal"
+            android:paddingHorizontal="8dp"
+            android:paddingTop="4dp">
+
+            <TextView
+                android:id="@+id/btnScaleDay"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="#F5B041"
+                android:gravity="center"
+                android:text="DAY"
+                android:textColor="#0B0E14"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnScaleMonth"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="MONTH"
+                android:textColor="#9CA3AF"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnScaleYear"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="YEAR"
+                android:textColor="#9CA3AF"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
         <!-- Heatmap P&L Calendar View -->
         <com.apexquant.pipsniper.ui.PnlCalendarView
             android:id="@+id/pnlCalendarView"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:background="#0F131C"
+            android:padding="8dp" />
+
+        <!-- Equity Curve & Session Analytics Graphs -->
+        <com.apexquant.pipsniper.ui.PerformanceChartsView
+            android:id="@+id/performanceChartsView"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
             android:background="#0F131C"
             android:padding="8dp" />
 

@@ -391,6 +391,45 @@ class HistoryFragment : Fragment() {
         )
     }
 
+    private fun checkAndNotifyGuardrailAfterSave(savedDayKey: String) {
+        val ctx = context ?: return
+        val todayKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        if (savedDayKey != todayKey) return
+
+        val goals = GoalsManager.getGoals(ctx)
+        val todayTrades = TradeHistoryManager.getAllTrades(ctx)
+            .filter { it.ledger == activeLedger && it.dayKey() == todayKey }
+        val todayUsd = todayTrades.sumOf { computeTradeUsd(it) }
+
+        val lossBreached = todayUsd <= -abs(goals.dailyMaxLossUsd)
+        val overtraded = todayTrades.size > goals.dailyMaxTrades
+
+        if (lossBreached || overtraded) {
+            val alertMessage = buildString {
+                if (lossBreached) {
+                    append(
+                        String.format(
+                            Locale.US,
+                            "• Daily Max Loss Reached: $%+.2f (Limit: -$%.0f)\n",
+                            todayUsd,
+                            abs(goals.dailyMaxLossUsd)
+                        )
+                    )
+                }
+                if (overtraded) {
+                    append("• Daily Trade Limit Exceeded: ${todayTrades.size} / ${goals.dailyMaxTrades} trades today\n")
+                }
+                append("\nProtect your capital — step away from the charts for today.")
+            }
+
+            AlertDialog.Builder(ctx)
+                .setTitle("Risk Guardrail Alert")
+                .setMessage(alertMessage)
+                .setPositiveButton("Understood", null)
+                .show()
+        }
+    }
+
     private fun renderTradeCards(trades: List<TradeRecord>) {
         cardsContainer.removeAllViews()
         val ctx = context ?: return
@@ -780,8 +819,31 @@ class HistoryFragment : Fragment() {
         val builder = AlertDialog.Builder(ctx)
             .setTitle(dialogTitle)
             .setView(scroll)
-            .setPositiveButton("Save Trade") { _, _ ->
+            .setPositiveButton("Save Trade", null)
+            .setNegativeButton("Cancel", null)
+
+        if (existingTrade != null) {
+            builder.setNeutralButton("Delete") { _, _ ->
+                TradeHistoryManager.deleteTrade(ctx, existingTrade.id)
+                refreshDashboard()
+            }
+        }
+
+        val dialog = builder.create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val rawUsd = etUsd.text.toString().toDoubleOrNull()
+                val entry = etEntry.text.toString().toDoubleOrNull() ?: 0.0
+                val sl = etSl.text.toString().toDoubleOrNull() ?: 0.0
+                val tp = etTp.text.toString().toDoubleOrNull() ?: 0.0
+
+                // Prevent accidental $0.00 logs when WIN or LOSS is chosen without USD or prices
+                if (rawUsd == null && selectedOutcome != "BE" && (entry <= 0.0 || sl <= 0.0 || tp <= 0.0)) {
+                    etUsd.error = "Enter USD profit/loss (or select BE)"
+                    etUsd.requestFocus()
+                    return@setOnClickListener
+                }
+
                 val signedUsd = when {
                     rawUsd == null -> if (selectedOutcome == "BE") 0.0 else null
                     selectedOutcome == "SL_HIT" -> -abs(rawUsd)
@@ -789,12 +851,9 @@ class HistoryFragment : Fragment() {
                     else -> rawUsd
                 }
                 val lot = etLot.text.toString().toDoubleOrNull() ?: 0.01
-                val entry = etEntry.text.toString().toDoubleOrNull() ?: 0.0
-                val sl = etSl.text.toString().toDoubleOrNull() ?: 0.0
-                val tp = etTp.text.toString().toDoubleOrNull() ?: 0.0
                 val notes = etNotes.text.toString().trim()
 
-                if (existingTrade == null) {
+                val savedRecord = if (existingTrade == null) {
                     val newRecord = TradeRecord(
                         ledger = activeLedger,
                         direction = selectedDir,
@@ -810,6 +869,7 @@ class HistoryFragment : Fragment() {
                         closedAt = selectedTimestampMs
                     )
                     TradeHistoryManager.addTrade(ctx, newRecord)
+                    newRecord
                 } else {
                     val updated = existingTrade.copy(
                         direction = selectedDir,
@@ -825,18 +885,15 @@ class HistoryFragment : Fragment() {
                         closedAt = selectedTimestampMs
                     )
                     TradeHistoryManager.updateTrade(ctx, updated)
+                    updated
                 }
-                refreshDashboard()
-            }
-            .setNegativeButton("Cancel", null)
 
-        if (existingTrade != null) {
-            builder.setNeutralButton("Delete") { _, _ ->
-                TradeHistoryManager.deleteTrade(ctx, existingTrade.id)
+                dialog.dismiss()
                 refreshDashboard()
+                checkAndNotifyGuardrailAfterSave(savedRecord.dayKey())
             }
         }
-        builder.show()
+        dialog.show()
     }
 
     private fun showEditGoalsDialog() {

@@ -1,6 +1,7 @@
 package com.apexquant.pipsniper.ui
 
 import android.app.AlertDialog
+import android.app.DatePickerDialog
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
@@ -232,7 +233,6 @@ class HistoryFragment : Fragment() {
         val ledgerTrades = TradeHistoryManager.getAllTrades(ctx)
             .filter { it.ledger == activeLedger }
 
-        // Build summaries for Day, Month, and Year
         val periodMap = mutableMapOf<String, PeriodPnlSummary>()
         val yearsSet = mutableSetOf(year, Calendar.getInstance().get(Calendar.YEAR))
 
@@ -275,7 +275,6 @@ class HistoryFragment : Fragment() {
             selectedFilterKey = selectedDayKey
         )
 
-        // Scope trades based on active scale & selection
         val periodTrades = when (activeScale) {
             CalendarScale.DAY -> ledgerTrades.filter { it.dayKey().startsWith(monthPrefix) }
             CalendarScale.MONTH -> ledgerTrades.filter { it.dayKey().startsWith(yearPrefix) }
@@ -288,7 +287,6 @@ class HistoryFragment : Fragment() {
             periodTrades
         }
 
-        // Update KPI strip
         val wins = scopeTrades.count { it.status == "TP_HIT" }
         val losses = scopeTrades.count { it.status == "SL_HIT" }
         val decided = wins + losses
@@ -305,13 +303,9 @@ class HistoryFragment : Fragment() {
             if (totalUsd >= 0) Color.parseColor("#10B981") else Color.parseColor("#EF4444")
         )
 
-        // Update Goals & Risk Guardrails Card (always measured against Today & Current Month)
         updateGoalsCard(ledgerTrades)
-
-        // Update Equity Curve & Session Bar Chart
         chartsView.setTrades(periodTrades)
 
-        // Update List Header & Trade Cards
         if (activeScale == CalendarScale.DAY && selectedDayKey != null) {
             tvListHeader.text = "TRADES ON $selectedDayKey (${scopeTrades.size})"
             tvClearDay.visibility = View.VISIBLE
@@ -412,7 +406,7 @@ class HistoryFragment : Fragment() {
             return
         }
 
-        val timeFmt = SimpleDateFormat("dd MMM yyyy • HH:mm", Locale.US)
+        val dateFmt = SimpleDateFormat("dd MMM yyyy", Locale.US)
 
         for (trade in trades) {
             val usdVal = computeTradeUsd(trade)
@@ -428,7 +422,6 @@ class HistoryFragment : Fragment() {
                 layoutParams = params
             }
 
-            // Header row: Direction + Status + Session + Edit Button
             val headerRow = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -478,7 +471,7 @@ class HistoryFragment : Fragment() {
                 setTextColor(Color.parseColor("#8A94A6"))
                 textSize = 11f
                 val notePreview = if (trade.notes.isNotBlank()) " • ${trade.notes}" else ""
-                text = "${timeFmt.format(Date(trade.effectiveTimestamp()))}$notePreview"
+                text = "${dateFmt.format(Date(trade.effectiveTimestamp()))}$notePreview"
             }
 
             card.addView(headerRow)
@@ -523,7 +516,12 @@ class HistoryFragment : Fragment() {
     }
 
     /**
-     * 10-Second Quick-Log & Edit Sheet with big 1-tap buttons for Direction, Outcome, and Session.
+     * Minimal Quick-Log & Edit Sheet:
+     * - Direction (BUY / SELL)
+     * - Outcome (WIN / LOSS / BE)
+     * - Session (ASIA / LONDON / NEW YORK)
+     * - Trade Date (TODAY / PICK DATE)
+     * - Net USD & Lot Size
      */
     private fun showTradeEntryOrEditDialog(existingTrade: TradeRecord?) {
         val ctx = context ?: return
@@ -543,6 +541,7 @@ class HistoryFragment : Fragment() {
             else -> "New York"
         }
         var selectedLot = existingTrade?.lotSize ?: 0.01
+        var selectedTimestampMs = existingTrade?.effectiveTimestamp() ?: System.currentTimeMillis()
 
         fun createToggleRow(options: List<Pair<String, String>>, initialKey: String, onSelect: (String) -> Unit): LinearLayout {
             val row = LinearLayout(ctx).apply {
@@ -617,8 +616,8 @@ class HistoryFragment : Fragment() {
             ) { selectedOutcome = it }
         )
 
-        // 3. Session (3 Big Explicit Buttons: ASIA / LONDON / NEW YORK)
-        addSectionLabel("3. SESSION (TAP TO VERIFY)")
+        // 3. Session (ASIA / LONDON / NEW YORK)
+        addSectionLabel("3. SESSION")
         container.addView(
             createToggleRow(
                 listOf("Asian" to "ASIA", "London" to "LONDON", "New York" to "NEW YORK"),
@@ -626,8 +625,84 @@ class HistoryFragment : Fragment() {
             ) { selectedSession = it }
         )
 
-        // 4. Net Profit/Loss in USD
-        addSectionLabel("4. NET PROFIT / LOSS (USD)")
+        // 4. Trade Date (TODAY / PICK DATE)
+        addSectionLabel("4. TRADE DATE")
+        val dateRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            lp.bottomMargin = 16
+            layoutParams = lp
+        }
+        val btnToday = TextView(ctx).apply {
+            text = "TODAY"
+            gravity = Gravity.CENTER
+            textSize = 12.5f
+            paint.isFakeBoldText = true
+            setPadding(12, 24, 12, 24)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = 8 }
+        }
+        val btnPickDate = TextView(ctx).apply {
+            gravity = Gravity.CENTER
+            textSize = 12.5f
+            paint.isFakeBoldText = true
+            setPadding(12, 24, 12, 24)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val displayDateFmt = SimpleDateFormat("dd MMM yyyy", Locale.US)
+
+        fun refreshDateButtons() {
+            val isToday = dayFmt.format(Date(selectedTimestampMs)) == dayFmt.format(Date())
+            if (isToday) {
+                btnToday.setBackgroundColor(Color.parseColor("#F5B041"))
+                btnToday.setTextColor(Color.parseColor("#0B0E14"))
+                btnPickDate.setBackgroundColor(Color.parseColor("#1E2433"))
+                btnPickDate.setTextColor(Color.parseColor("#D1D5DB"))
+                btnPickDate.text = "PICK DATE"
+            } else {
+                btnToday.setBackgroundColor(Color.parseColor("#1E2433"))
+                btnToday.setTextColor(Color.parseColor("#D1D5DB"))
+                btnPickDate.setBackgroundColor(Color.parseColor("#F5B041"))
+                btnPickDate.setTextColor(Color.parseColor("#0B0E14"))
+                btnPickDate.text = displayDateFmt.format(Date(selectedTimestampMs)).uppercase(Locale.US)
+            }
+        }
+        refreshDateButtons()
+
+        btnToday.setOnClickListener {
+            selectedTimestampMs = System.currentTimeMillis()
+            refreshDateButtons()
+        }
+
+        btnPickDate.setOnClickListener {
+            val cal = Calendar.getInstance().apply { timeInMillis = selectedTimestampMs }
+            DatePickerDialog(
+                ctx,
+                { _, pickedYear, pickedMonth, pickedDay ->
+                    val updatedCal = Calendar.getInstance().apply {
+                        set(Calendar.YEAR, pickedYear)
+                        set(Calendar.MONTH, pickedMonth)
+                        set(Calendar.DAY_OF_MONTH, pickedDay)
+                        set(Calendar.HOUR_OF_DAY, 12)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                    }
+                    selectedTimestampMs = updatedCal.timeInMillis
+                    refreshDateButtons()
+                },
+                cal.get(Calendar.YEAR),
+                cal.get(Calendar.MONTH),
+                cal.get(Calendar.DAY_OF_MONTH)
+            ).show()
+        }
+
+        dateRow.addView(btnToday)
+        dateRow.addView(btnPickDate)
+        container.addView(dateRow)
+
+        // 5. Net Profit/Loss in USD
+        addSectionLabel("5. NET PROFIT / LOSS (USD)")
         val etUsd = EditText(ctx).apply {
             hint = "e.g. 25.50 (auto-applies - sign if LOSS)"
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
@@ -635,8 +710,8 @@ class HistoryFragment : Fragment() {
         }
         container.addView(etUsd)
 
-        // 5. Quick Lot Size Chips
-        addSectionLabel("5. LOT SIZE")
+        // 6. Quick Lot Size Chips
+        addSectionLabel("6. LOT SIZE")
         val etLot = EditText(ctx).apply {
             hint = "Lot Size (default 0.01)"
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
@@ -653,7 +728,7 @@ class HistoryFragment : Fragment() {
         )
         container.addView(etLot)
 
-        // 6. Optional Notes & Price Levels
+        // 7. Optional Notes & Price Levels
         val etNotes = EditText(ctx).apply {
             hint = "Setup Note (optional, e.g. London Sweep)"
             setText(existingTrade?.notes ?: "")
@@ -731,7 +806,8 @@ class HistoryFragment : Fragment() {
                         status = selectedOutcome,
                         session = selectedSession,
                         notes = notes,
-                        closedAt = System.currentTimeMillis()
+                        createdAt = selectedTimestampMs,
+                        closedAt = selectedTimestampMs
                     )
                     TradeHistoryManager.addTrade(ctx, newRecord)
                 } else {
@@ -745,7 +821,8 @@ class HistoryFragment : Fragment() {
                         status = selectedOutcome,
                         session = selectedSession,
                         notes = notes,
-                        closedAt = existingTrade.closedAt ?: System.currentTimeMillis()
+                        createdAt = selectedTimestampMs,
+                        closedAt = selectedTimestampMs
                     )
                     TradeHistoryManager.updateTrade(ctx, updated)
                 }
